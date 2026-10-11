@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Spark & Temp
+checkpoints/
+data/checkpoints/
+data/spark_temp/
+spark-warehouse/
+*.jar
+*.tmp
+
+# Data
+data/raw/
+data/processed/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,14 @@
+kafka-python==3.0.11
+numpy==2.5.3
+pandas==2.3.3
+psycopg2-binary==2.9.13
+py4j==0.10.9.7
+pyspark==3.5.1
+python-dateutil==2.9.0.post0
+pytz==2026.4
+setuptools>=70.0.0
+six==1.17.0
+sqlalchemy==2.1.2
+tzdata==2026.4
+websocket-client==1.9.2
+flask>=3.0.0
