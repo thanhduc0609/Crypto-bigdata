@@ -15,6 +15,7 @@ Executes near-real-time inference for BTC-USDT price direction (next 5m):
 import os
 import sys
 import json
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -83,6 +84,113 @@ def load_prediction_model():
     return model, features
 
 
+def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
+    """
+    Fetches the most up-to-date 1m BTC candles for live inference:
+      1. First checks PostgreSQL DW for recent streaming candles (<= 5 mins old).
+      2. If DB candles are stale (> 5 mins old) or insufficient, fetches latest 100 
+         1-minute candles directly from OKX REST API, syncs them to DW, and uses them.
+      3. Falls back to historical Gold Lakehouse if API is unavailable.
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    # 1. Try PostgreSQL DW for real-time streaming candles
+    try:
+        conn = get_db_connection()
+        try:
+            query = """
+                SELECT 
+                    window_start, window_end, open, high, low, close, volume, 
+                    buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source
+                FROM warehouse.fact_crypto_1m_candles
+                WHERE symbol = 'BTC-USDT'
+                ORDER BY window_start DESC
+                LIMIT 120
+            """
+            df_db = pd.read_sql(query, conn)
+            if not df_db.empty and len(df_db) >= min_candles:
+                latest_ts = pd.to_datetime(df_db["window_start"].iloc[0])
+                if latest_ts.tzinfo is None:
+                    latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+                # Check freshness: candle must be within last 5 minutes
+                if (now_utc - latest_ts) <= timedelta(minutes=5):
+                    df_sorted = df_db.sort_values("window_start").reset_index(drop=True)
+                    return df_sorted
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[PREDICT] Note checking DB candles: {e}")
+
+    # 2. Fetch live recent candles directly from OKX REST API
+    try:
+        url = "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1m&limit=100"
+        req = urllib.request.Request(url, headers={"User-Agent": "CryptoDataBot/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8")).get("data", [])
+
+        if data and len(data) >= 26:
+            records = []
+            conn = None
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+            except Exception:
+                cur = None
+
+            for row in data:
+                ts_ms = int(row[0])
+                dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+                dt_end = dt + timedelta(minutes=1)
+                o, h, l, c, v = float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])
+                vol_ccy = float(row[6]) if len(row) > 6 else 0.0
+
+                records.append({
+                    "window_start": dt,
+                    "window_end": dt_end,
+                    "open": o,
+                    "high": h,
+                    "low": l,
+                    "close": c,
+                    "volume": v,
+                    "total_trade_value": vol_ccy,
+                    "source": "okx_live_sync"
+                })
+
+                if cur:
+                    try:
+                        cur.execute("""
+                            INSERT INTO warehouse.fact_crypto_1m_candles (
+                                symbol, window_start, window_end, open, high, low, close, volume, total_trade_value, source
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (symbol, window_start) DO UPDATE SET
+                                close = EXCLUDED.close,
+                                high = EXCLUDED.high,
+                                low = EXCLUDED.low,
+                                volume = EXCLUDED.volume,
+                                total_trade_value = EXCLUDED.total_trade_value;
+                        """, ("BTC-USDT", dt, dt_end, o, h, l, c, v, vol_ccy, "okx_live_sync"))
+                    except Exception:
+                        pass
+
+            if conn:
+                try:
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                except Exception:
+                    pass
+
+            df_live = pd.DataFrame(records).sort_values("window_start").reset_index(drop=True)
+            print(f"[PREDICT] Synced and loaded {len(df_live)} live 1m candles directly from OKX.")
+            return df_live
+    except Exception as e:
+        print(f"[PREDICT] Note: Live OKX REST fetch error ({e}).")
+
+    # 3. Fallback to historical candles in Lakehouse / DB
+    return fetch_historical_btc_candles(min_candles=min_candles)
+
+
 def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional[Dict[str, Any]]:
     """
     Performs inference on the latest finalized BTC candle and saves to PostgreSQL.
@@ -91,7 +199,7 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
     model_version = get_current_model_version()
 
     if candles_df is None:
-        candles_df = fetch_historical_btc_candles(min_candles=40)
+        candles_df = fetch_live_or_recent_candles(min_candles=40)
 
     # Ensure window_end is present and filter for finalized candles only (discard active unclosed minute)
     now_utc = datetime.now(timezone.utc)

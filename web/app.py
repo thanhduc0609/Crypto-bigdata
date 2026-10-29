@@ -1883,8 +1883,10 @@ def api_ml_history():
 def api_ml_trigger():
     """Allows manual trigger of a single prediction from the frontend."""
     try:
-        from ml.predict import run_single_prediction
-        pred = run_single_prediction()
+        import importlib
+        import ml.predict
+        importlib.reload(ml.predict)
+        pred = ml.predict.run_single_prediction()
         return jsonify({"status": "success", "prediction": pred})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
