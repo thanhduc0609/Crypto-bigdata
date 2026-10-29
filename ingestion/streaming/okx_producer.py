@@ -77,45 +77,56 @@ producer = None
 def on_open(ws):
     print("=" * 70)
     print("Connected to OKX WebSocket")
-    print("=" * 70)
-
+    # Active subscription: Dedicated exclusively to BTC-USDT for academic ML pipeline
     subscribe_message = {
         "op": "subscribe",
         "args": [
-            {"channel": "trades", "instId": "BTC-USDT"},
-            {"channel": "trades", "instId": "ETH-USDT"},
-            {"channel": "trades", "instId": "SOL-USDT"}
+            {"channel": "trades", "instId": "BTC-USDT"}
         ]
     }
     ws.send(json.dumps(subscribe_message))
 
-    print("Subscribed:")
-    print("  BTC-USDT -> Partition 0")
-    print("  ETH-USDT -> Partition 1")
-    print("  SOL-USDT -> Partition 2")
+    print("Active Subscription:")
+    print("  BTC-USDT -> Partition 0 (Dedicated Pipeline)")
     print("=" * 70)
 
 
 def on_message(ws, message):
     try:
-        message = json.loads(message)
-        if "data" not in message:
+        data = json.loads(message)
+        if "data" not in data or not isinstance(data["data"], list):
             return
 
-        for trade in message["data"]:
+        for trade in data["data"]:
+            if not isinstance(trade, dict):
+                continue
+            # Detect and reject malformed records
+            if not all(k in trade for k in ("tradeId", "instId", "px", "sz", "side", "ts")):
+                print(f"[WARN] Malformed trade skipped: {trade}")
+                continue
+
+            try:
+                price = float(trade["px"])
+                size = float(trade["sz"])
+                ts = int(trade["ts"])
+                side = str(trade["side"]).lower()
+                if price <= 0.0 or size <= 0.0 or ts <= 0 or side not in ("buy", "sell"):
+                    continue
+            except (ValueError, TypeError) as val_err:
+                print(f"[WARN] Invalid data types in trade: {val_err}")
+                continue
+
             record = {
-                "trade_id": trade["tradeId"],
-                "symbol": trade["instId"],
-                "price": float(trade["px"]),
-                "size": float(trade["sz"]),
-                "side": trade["side"],
-                "timestamp": int(trade["ts"])
+                "trade_id": str(trade["tradeId"]),
+                "symbol": str(trade["instId"]),
+                "price": price,
+                "size": size,
+                "side": side,
+                "timestamp": ts
             }
 
             symbol = record["symbol"]
-            partition = PARTITION_MAP.get(symbol)
-            if partition is None:
-                continue
+            partition = PARTITION_MAP.get(symbol, 0)
 
             try:
                 producer.send(
@@ -136,8 +147,8 @@ def on_message(ws, message):
                 f"P{partition} | "
                 f"{symbol:<9} | "
                 f"{record['side']:<4} | "
-                f"Price: {record['price']:<12} | "
-                f"Size: {record['size']}"
+                f"Price: {record['price']:<12.2f} | "
+                f"Size: {record['size']:<8.4f}"
             )
     except Exception as error:
         print(f"[ERROR] Failed to process message: {error}")

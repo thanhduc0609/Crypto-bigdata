@@ -1,0 +1,10 @@
+{
+  "version": "2.0.0",
+  "uploaded_at": "2026-10-23T03:42:00.035989+00:00",
+  "checksums": {
+    "btc_xgboost_model.json": "6e53a2155df0919b4a24d3d70d90eb3f26beec2743ead0fa51355694aa39123b",
+    "feature_schema.json": "e3f38906fb9bbe8424afc1b27a996113181de6cfc0ad60017e253852cb3a6091",
+    "model_metadata.json": "f6a252d65ab7794cb4c537a51cbb181a3244b134c87f637bbda21966f72bfd81",
+    "evaluation_results.json": "718f6f19ba8f84f1b1f0c372609fc7fc8769d4293de403850100968a4747d9f0"
+  }
+}

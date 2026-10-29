@@ -1,10 +1,18 @@
 """
 =============================================================================
-Crypto Big Data - Data Warehouse Database Configuration
+Crypto Big Data - Real-Time Streaming Data Warehouse Configuration & Migration
+=============================================================================
+Architecture: Pure Streaming Serving Layer (PostgreSQL 16)
+  - Dimensions : dim_symbol, dim_alert_tier
+  - Facts      : fact_crypto_trades (Whale & Alert Trades), fact_crypto_1m_candles (1m Aggregations)
+  - Views      : vw_whale_trades, vw_rolling_5m_metrics, vw_order_flow_pressure,
+                 vw_streaming_volatility, vw_streaming_pipeline_telemetry,
+                 vw_hourly_market_summary, vw_daily_market_summary, ...
 =============================================================================
 """
 
 import os
+import sys
 from pathlib import Path
 import psycopg2
 from sqlalchemy import create_engine
@@ -49,6 +57,25 @@ def get_db_engine():
     return create_engine(url, pool_pre_ping=True)
 
 
+def cleanup_legacy_batch_tables(conn):
+    """
+    Dọn dẹp các bảng Batch cũ không còn sử dụng trong dự án Pure Streaming
+    nhằm giữ PostgreSQL luôn nhẹ, tinh gọn và đúng chuẩn kiến trúc Speed Layer.
+    """
+    legacy_tables = [
+        "fact_crypto_funding_rates",
+        "fact_crypto_liquidations",
+        "fact_crypto_long_short_ratio",
+        "fact_crypto_open_interest",
+        "fact_market_predictions"
+    ]
+    with conn.cursor() as cur:
+        for tbl in legacy_tables:
+            cur.execute(f"DROP TABLE IF EXISTS warehouse.{tbl} CASCADE;")
+    conn.commit()
+    print("[*] Da don dep cac bang Batch cu khoi schema 'warehouse' thanh cong.")
+
+
 def init_warehouse_schema():
     """Thực thi DDL và Views để khởi tạo Schema Data Warehouse (dim -> fact -> views)"""
     sql_dir = project_root / "warehouse" / "sql"
@@ -70,23 +97,49 @@ def init_warehouse_schema():
     if views_dir.exists():
         sql_files.extend(sorted(views_dir.glob("*.sql")))
 
-    # Fallback nếu dùng file cũ
-    if not sql_files:
-        ddl_file = sql_dir / "01_schema_ddl.sql"
-        views_file = sql_dir / "02_analytics_views.sql"
-        if ddl_file.exists():
-            sql_files.append(ddl_file)
-        if views_file.exists():
-            sql_files.append(views_file)
-
     print(f"[*] Dang ket noi toi PostgreSQL Data Warehouse: {DB_HOST}:{DB_PORT}/{DB_NAME}")
     with get_db_connection() as conn:
+        # Bước 1: Dọn dẹp bảng batch cũ
+        cleanup_legacy_batch_tables(conn)
+
+        # Bước 2: Nạp các tệp DDL và Views theo thứ tự
         with conn.cursor() as cur:
             for sql_file in sql_files:
                 print(f"[+] Thuc thi SQL: {sql_file.relative_to(project_root)}")
                 cur.execute(sql_file.read_text(encoding="utf-8"))
         conn.commit()
-    print("[OK] Khoi tao toan bo Schema (dim, fact, views) thanh cong trong schema 'warehouse'!")
+
+        # Bước 3: Kiểm tra và in báo cáo tình trạng Data Warehouse
+        print("\n" + "=" * 65)
+        print("BAO CAO TINH TRANG POSTGRESQL STREAMING DATA WAREHOUSE")
+        print("=" * 65)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'warehouse' AND table_type = 'BASE TABLE'
+                ORDER BY table_name;
+            """)
+            tables = [r[0] for r in cur.fetchall()]
+            print(f"[*] Bang Du Lieu (Tables): {len(tables)}")
+            for t in tables:
+                cur.execute(f"SELECT count(*) FROM warehouse.{t};")
+                count = cur.fetchone()[0]
+                print(f"    - warehouse.{t:<26}: {count:>6} rows")
+
+            cur.execute("""
+                SELECT table_name 
+                FROM information_schema.views 
+                WHERE table_schema = 'warehouse'
+                ORDER BY table_name;
+            """)
+            views = [r[0] for r in cur.fetchall()]
+            print(f"\n[*] Views Phan Tich (Streaming Views): {len(views)}")
+            for v in views:
+                print(f"    - warehouse.{v}")
+
+        print("=" * 65)
+    print("[OK] Khoi tao toan bo Schema Pure Streaming Data Warehouse hoan tat!\n")
 
 
 if __name__ == "__main__":
@@ -94,3 +147,4 @@ if __name__ == "__main__":
         init_warehouse_schema()
     except Exception as e:
         print(f"[ERROR] Khong the khoi tao Schema: {e}")
+        sys.exit(1)

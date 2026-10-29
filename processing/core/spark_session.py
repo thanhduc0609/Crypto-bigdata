@@ -37,7 +37,7 @@ def ensure_java_and_hadoop():
 
 
 def load_env_vars():
-    """Đọc file .env nếu chưa có trong biến môi trường"""
+    """Đọc file .env nếu chưa có trong biến môi trường và mở rộng các biến lồng nhau"""
     env_path = project_root / ".env"
     if not env_path.exists():
         return
@@ -48,8 +48,19 @@ def load_env_vars():
                 continue
             k, v = line.split("=", 1)
             k, v = k.strip(), v.strip().strip("'\"")
-            if k not in os.environ:
+            if k not in os.environ or os.environ[k].startswith("${"):
                 os.environ[k] = v
+
+    # Mở rộng các biến có dạng ${VAR_NAME}
+    bucket_name = os.getenv("S3_BUCKET_NAME", "")
+    for k, v in list(os.environ.items()):
+        if "${S3_BUCKET_NAME}" in v and bucket_name:
+            os.environ[k] = v.replace("${S3_BUCKET_NAME}", bucket_name)
+        elif "${" in v:
+            for sub_k, sub_v in list(os.environ.items()):
+                if sub_v and f"${{{sub_k}}}" in v:
+                    v = v.replace(f"${{{sub_k}}}", sub_v)
+            os.environ[k] = v
 
 
 def create_spark_session(
@@ -81,10 +92,12 @@ def create_spark_session(
         SparkSession.builder
         .appName(app_name)
         .master(master)
-        .config("spark.driver.host", "localhost")
+        .config("spark.driver.host", "127.0.0.1")
+        .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.sql.shuffle.partitions", "4")
         .config("spark.local.dir", str(spark_temp))
         .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
+        .config("spark.sql.parquet.enableVectorizedReader", "false")
     )
 
     if packages:

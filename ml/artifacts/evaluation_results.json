@@ -1,0 +1,102 @@
+{
+  "metrics": {
+    "accuracy": 0.4998,
+    "precision": 0.4918,
+    "recall": 0.1836,
+    "f1_score": 0.2674,
+    "balanced_accuracy": 0.498,
+    "roc_auc": 0.52
+  },
+  "confusion_matrix": [
+    [
+      7937,
+      1832
+    ],
+    [
+      7885,
+      1773
+    ]
+  ],
+  "feature_importance": [
+    {
+      "feature": "macd",
+      "importance": 0.1425
+    },
+    {
+      "feature": "macd_signal",
+      "importance": 0.0825
+    },
+    {
+      "feature": "log_return",
+      "importance": 0.0714
+    },
+    {
+      "feature": "bb_bandwidth",
+      "importance": 0.0673
+    },
+    {
+      "feature": "ema_12",
+      "importance": 0.0667
+    },
+    {
+      "feature": "ema_26",
+      "importance": 0.0659
+    },
+    {
+      "feature": "bb_upper",
+      "importance": 0.064
+    },
+    {
+      "feature": "price_momentum_5m",
+      "importance": 0.0621
+    },
+    {
+      "feature": "rolling_volatility_15m",
+      "importance": 0.0597
+    },
+    {
+      "feature": "bb_lower",
+      "importance": 0.0594
+    },
+    {
+      "feature": "sma_5",
+      "importance": 0.0585
+    },
+    {
+      "feature": "rsi_14",
+      "importance": 0.0574
+    },
+    {
+      "feature": "high_low_range",
+      "importance": 0.0555
+    },
+    {
+      "feature": "sma_15",
+      "importance": 0.054
+    },
+    {
+      "feature": "volume_change",
+      "importance": 0.0331
+    }
+  ],
+  "baseline_comparison": {
+    "baseline": {
+      "strategy": "Majority Class Predictor",
+      "majority_class": 0,
+      "class_label": "NOT_UP",
+      "accuracy": 0.5029,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "outperforms_baseline": false,
+    "accuracy_lift_pct": -0.61
+  },
+  "sample_counts": {
+    "test_samples": 19427,
+    "actual_up": 9658,
+    "actual_not_up": 9769,
+    "predicted_up": 3605,
+    "predicted_not_up": 15822
+  }
+}

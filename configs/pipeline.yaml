@@ -1,0 +1,53 @@
+# =============================================================================
+# Crypto Big Data - Pipeline Configuration (BTC-USDT Focus)
+# =============================================================================
+
+pipeline:
+  name: "crypto-bigdata-btc-pipeline"
+  target_symbol: "BTC-USDT"
+  supported_symbols:
+    - "BTC-USDT"
+
+ingestion:
+  okx_ws_url: "wss://ws.okx.com:8443/ws/v5/public"
+  okx_rest_url: "https://www.okx.com"
+  channels:
+    - name: "trades"
+      instId: "BTC-USDT"
+  reconnect_delay_seconds: 5
+  ping_interval_seconds: 25
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  topic_trades: "crypto-trades"
+  partitions: 3
+  btc_partition: 0
+
+streaming:
+  watermark_delay: "2 minutes"
+  window_duration: "1 minute"
+  trigger_interval: "10 seconds"
+  whale_threshold_usd: 500000.0
+
+storage:
+  destination: "s3" # Options: s3, local, hdfs
+  s3:
+    bucket_env_var: "S3_BUCKET_NAME"
+    region_env_var: "AWS_REGION"
+    bronze_path: "crypto/bronze/trades"
+    silver_path: "crypto/silver/trades"
+    gold_candles_path: "crypto/gold/candles_1m"
+    gold_features_path: "crypto/gold/features"
+  local:
+    base_dir: "data/lake"
+    bronze_dir: "data/lake/bronze"
+    silver_dir: "data/lake/silver"
+    gold_dir: "data/lake/gold"
+
+warehouse:
+  host_env_var: "POSTGRES_HOST"
+  port_env_var: "POSTGRES_PORT"
+  db_env_var: "POSTGRES_DB"
+  user_env_var: "POSTGRES_USER"
+  password_env_var: "POSTGRES_PASSWORD"
+  schema: "warehouse"

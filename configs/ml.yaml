@@ -1,0 +1,63 @@
+# =============================================================================
+# Crypto Big Data - Machine Learning Configuration (XGBoost BTC Direction)
+# =============================================================================
+
+ml:
+  target_symbol: "BTC-USDT"
+  model_type: "XGBClassifier"
+  model_name: "btc_xgboost_direction"
+  model_version: "1.0.0"
+
+prediction:
+  horizon_minutes: 5
+  target_column: "target_direction" # 1 if future_return > 0 else 0
+  prediction_interval_seconds: 60
+
+dataset:
+  train_split: 0.70
+  validation_split: 0.15
+  test_split: 0.15
+  embargo_buffer_minutes: 5 # Prevent boundary leakage
+  timeframe: "1m"
+  min_samples_required: 120
+
+features:
+  feature_set_mode: "common" # "common" (15 OHLCV features, identical in historical & streaming) or "extended" (18 features)
+  common_features:
+    - "log_return"
+    - "price_momentum_5m"
+    - "high_low_range"
+    - "volume_change"
+    - "sma_5"
+    - "sma_15"
+    - "ema_12"
+    - "ema_26"
+    - "rsi_14"
+    - "macd"
+    - "macd_signal"
+    - "bb_upper"
+    - "bb_lower"
+    - "bb_bandwidth"
+    - "rolling_volatility_15m"
+  extended_microstructure_features:
+    - "buy_sell_ratio"
+    - "trade_imbalance"
+    - "vwap_deviation"
+
+hyperparameters:
+  n_estimators: 200
+  max_depth: 4
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  objective: "binary:logistic"
+  eval_metric: "logloss"
+  random_state: 42
+  early_stopping_rounds: 20
+
+artifacts:
+  directory: "ml/artifacts"
+  model_filename: "btc_xgboost_model.json"
+  feature_schema_filename: "feature_schema.json"
+  model_metadata_filename: "model_metadata.json"
+  evaluation_results_filename: "evaluation_results.json"

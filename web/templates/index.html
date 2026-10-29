@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="vi" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,6 +19,7 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
     <!-- Background glow elements -->
@@ -38,20 +39,29 @@
                 </div>
 
                 <!-- NAVIGATION TABS -->
+                <!-- NAVIGATION TABS: 6 DEDICATED STREAMING ANALYSIS MODULES -->
                 <nav class="nav-tab-menu" id="nav-tab-menu">
-                    <button class="nav-tab-btn active" data-tab="tab-terminal" id="tab-btn-terminal">
-                        <span class="tab-icon">📊</span>
-                        <span class="tab-title">Terminal Giao Dịch</span>
+                    <button class="nav-tab-btn active" data-tab="tab-candlestick" id="tab-btn-candlestick" title="Biểu đồ Nến 1m Tumbling Window & Chỉ báo VWAP">
+                        <span class="tab-icon">🕯️</span>
+                        <span class="tab-title">Nến & VWAP</span>
                     </button>
-                    <button class="nav-tab-btn" data-tab="tab-warehouse" id="tab-btn-warehouse">
-                        <span class="tab-icon">🏛</span>
+                    <button class="nav-tab-btn" data-tab="tab-orderflow" id="tab-btn-orderflow" title="Phân tích Cấu trúc Vi mô & Áp lực Cung cầu Imbalance">
+                        <span class="tab-icon">🌊</span>
+                        <span class="tab-title">Áp Lực Cung Cầu</span>
+                    </button>
+                    <button class="nav-tab-btn" data-tab="tab-whales" id="tab-btn-whales" title="Radar Dòng tiền Tổ chức & Giao dịch Cá mập >= $500K">
+                        <span class="tab-icon">🐋</span>
+                        <span class="tab-title">Radar Cá Mập</span>
+                    </button>
+                    <button class="nav-tab-btn" data-tab="tab-signals" id="tab-btn-signals" title="Mô hình XGBoost Dự báo Xu hướng BTC-USDT (5 Phút) & Tín hiệu Định lượng">
+                        <span class="tab-icon">🤖</span>
+                        <span class="tab-title">Dự Báo ML XGBoost</span>
+                    </button>
+                    <button class="nav-tab-btn" data-tab="tab-warehouse" id="tab-btn-warehouse" title="Truy vấn PostgreSQL Data Warehouse & Xuất File CSV">
+                        <span class="tab-icon">🏛️</span>
                         <span class="tab-title">Kho Dữ Liệu DW</span>
                     </button>
-                    <button class="nav-tab-btn" data-tab="tab-analytics" id="tab-btn-analytics">
-                        <span class="tab-icon">📈</span>
-                        <span class="tab-title">Báo Cáo Định Lượng</span>
-                    </button>
-                    <button class="nav-tab-btn" data-tab="tab-pipeline" id="tab-btn-pipeline">
+                    <button class="nav-tab-btn" data-tab="tab-pipeline" id="tab-btn-pipeline" title="Giám sát Kiến trúc Streaming, Kafka, Spark & Độ trễ">
                         <span class="tab-icon">⚙️</span>
                         <span class="tab-title">Giám Sát Pipeline</span>
                     </button>
@@ -80,52 +90,47 @@
                         <span class="icon-refresh">🔄</span>
                     </button>
                 </div>
+                <button id="theme-toggle-btn" class="btn-theme-toggle" title="Chuyển đổi giao diện Sáng / Tối">
+                    <span id="theme-icon">🌙</span>
+                </button>
                 <div class="current-clock" id="current-clock">--:--:-- UTC</div>
             </div>
         </header>
 
-        <!-- TICKER CARDS STRIP (Luôn hiển thị cho 3 cặp tiền chính) -->
-        <section class="ticker-strip" id="ticker-strip">
-            <div class="ticker-card active" data-symbol="BTC-USDT" id="card-btc">
+        <!-- TICKER CARDS STRIP: CHUYÊN BIỆT CẶP BTC-USDT -->
+        <section class="ticker-strip single-symbol" id="ticker-strip">
+            <div class="ticker-card active btc-hero-card" data-symbol="BTC-USDT" id="card-btc">
                 <div class="card-header">
-                    <span class="coin-symbol"><span class="coin-badge btc">BTC</span> BTC / USDT</span>
+                    <span class="coin-symbol">
+                        <span class="coin-badge btc">BTC</span>
+                        <strong class="coin-pair">BTC / USDT</strong>
+                        <span class="badge-active-pipeline">CHUYÊN BIỆT (DEDICATED)</span>
+                        <span class="badge-active-pipeline" style="background:rgba(2,132,199,0.12); color:#0284c7; border-color:rgba(2,132,199,0.3);">⚡ OKX LIVE STREAM</span>
+                    </span>
                     <span class="price-change positive" id="btc-change">+0.00%</span>
                 </div>
-                <div class="card-body">
-                    <div class="main-price" id="btc-price">$0.00</div>
-                    <div class="sub-info">
-                        <span>24h Vol: <strong id="btc-vol">$0.0M</strong></span>
-                        <span>VWAP: <strong id="btc-vwap">$0</strong></span>
+                <div class="card-body btc-hero-body">
+                    <div class="hero-left">
+                        <div class="main-price" id="btc-price">$0.00</div>
+                        <span class="price-subtext">Khớp lệnh thời gian thực • Spot & Perpetual SWAP</span>
                     </div>
-                </div>
-                <div class="card-glow"></div>
-            </div>
-
-            <div class="ticker-card" data-symbol="ETH-USDT" id="card-eth">
-                <div class="card-header">
-                    <span class="coin-symbol"><span class="coin-badge eth">ETH</span> ETH / USDT</span>
-                    <span class="price-change" id="eth-change">+0.00%</span>
-                </div>
-                <div class="card-body">
-                    <div class="main-price" id="eth-price">$0.00</div>
-                    <div class="sub-info">
-                        <span>24h Vol: <strong id="eth-vol">$0.0M</strong></span>
-                        <span>VWAP: <strong id="eth-vwap">$0</strong></span>
-                    </div>
-                </div>
-                <div class="card-glow"></div>
-            </div>
-
-            <div class="ticker-card" data-symbol="SOL-USDT" id="card-sol">
-                <div class="card-header">
-                    <span class="coin-symbol"><span class="coin-badge sol">SOL</span> SOL / USDT</span>
-                    <span class="price-change" id="sol-change">+0.00%</span>
-                </div>
-                <div class="card-body">
-                    <div class="main-price" id="sol-price">$0.00</div>
-                    <div class="sub-info">
-                        <span>24h Vol: <strong id="sol-vol">$0.0M</strong></span>
-                        <span>VWAP: <strong id="sol-vwap">$0</strong></span>
+                    <div class="hero-metrics">
+                        <div class="metric-cell">
+                            <span class="m-label">Khối Lượng 24h</span>
+                            <strong class="m-val" id="btc-vol">$0.0M</strong>
+                        </div>
+                        <div class="metric-cell">
+                            <span class="m-label">VWAP 24h</span>
+                            <strong class="m-val" id="btc-vwap">$0</strong>
+                        </div>
+                        <div class="metric-cell">
+                            <span class="m-label">Phân Vùng S3 Data Lake</span>
+                            <strong class="m-val" style="color:var(--accent-cyan);">symbol=BTC-USDT</strong>
+                        </div>
+                        <div class="metric-cell">
+                            <span class="m-label">Độ Trễ Kafka / Spark</span>
+                            <strong class="m-val" style="color:var(--accent-green);">< 15ms (Live P0)</strong>
+                        </div>
                     </div>
                 </div>
                 <div class="card-glow"></div>
@@ -133,12 +138,11 @@
         </section>
 
         <!-- =================================================================== -->
-        <!-- TAB 1: TERMINAL GIAO DỊCH & QUANT REAL-TIME                         -->
+        <!-- TAB 1: BIỂU ĐỒ NẾN 1M TUMBLING WINDOW & CHỈ BÁO VWAP THỜI GIAN THỰC -->
         <!-- =================================================================== -->
-        <main class="tab-pane active" id="tab-terminal">
-            <div class="main-grid">
-                <!-- LEFT COLUMN: TRADINGVIEW CHART & ORDER FLOW -->
-                <div class="chart-section-card">
+        <main class="tab-pane active" id="tab-candlestick">
+            <div class="chart-full-layout">
+                <div class="chart-section-card full-width">
                     <!-- CHART HEADER TOOLBAR -->
                     <div class="chart-toolbar">
                         <div class="toolbar-left">
@@ -169,8 +173,10 @@
 
                         <div class="toolbar-right">
                             <div class="legend-items">
-                                <span class="legend-chip vwap-legend"><span class="dot-vwap"></span> VWAP (Gia quyền)</span>
-                                <span class="legend-chip vol-legend"><span class="dot-vol"></span> Khối lượng</span>
+                                <span class="legend-chip vwap-legend"><span class="dot-vwap"></span> VWAP</span>
+                                <span class="legend-chip vwap-bands-legend"><span class="dot-bands"></span> Dải &plusmn;2&sigma;</span>
+                                <span class="legend-chip vol-legend"><span class="dot-vol"></span> Khối Lượng</span>
+                                <span class="vwap-status-pill" id="vwap-deviation-pill">Vùng Cân Bằng (Fair Value)</span>
                             </div>
                         </div>
                     </div>
@@ -194,17 +200,37 @@
                             <span class="stat-val" id="stat-close">---</span>
                         </div>
                         <div class="stat-item">
-                            <span class="stat-lbl">VWAP</span>
+                            <span class="stat-lbl">VWAP (Gia Quyền)</span>
                             <span class="stat-val vwap-val" id="stat-vwap">---</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-lbl">Dải Trên (+2&sigma;)</span>
+                            <span class="stat-val" id="stat-vwap-upper" style="color:var(--accent-cyan);">---</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-lbl">Dải Dưới (-2&sigma;)</span>
+                            <span class="stat-val" id="stat-vwap-lower" style="color:var(--accent-purple);">---</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-lbl">Biến Động Parkinson</span>
+                            <span class="stat-val" id="stat-parkinson-vol" style="color:var(--accent-yellow);">---</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-lbl">Tích Lũy CVD</span>
+                            <span class="stat-val" id="stat-cvd">---</span>
                         </div>
                         <div class="stat-item">
                             <span class="stat-lbl">Volume (Coin)</span>
                             <span class="stat-val" id="stat-vol">---</span>
                         </div>
+                        <div class="stat-item">
+                            <span class="stat-lbl">Độ Lệch VWAP</span>
+                            <span class="stat-val" id="stat-vwap-diff">0.00%</span>
+                        </div>
                     </div>
 
                     <!-- TRADINGVIEW LIGHTWEIGHT CANDLESTICK CHART CONTAINER -->
-                    <div class="chart-container-wrapper">
+                    <div class="chart-container-wrapper large-chart">
                         <div id="tv-chart-container" class="tv-chart-container"></div>
                         <div class="chart-loader" id="chart-loader">
                             <div class="spinner"></div>
@@ -212,150 +238,35 @@
                         </div>
                     </div>
 
-                    <!-- ORDER FLOW PRESSURE & TRADE IMBALANCE GAUGE -->
-                    <div class="orderflow-panel">
-                        <div class="panel-header">
+                    <!-- RECENT 10 CANDLES AGGREGATION TABLE -->
+                    <div class="recent-candles-section">
+                        <div class="section-subhead">
                             <div class="title-with-badge">
-                                <span class="panel-icon">⚖️</span>
-                                <h3>CÁN CÂN ÁP LỰC MUA / BÁN (ORDER FLOW IMBALANCE)</h3>
+                                <span class="subhead-icon">📑</span>
+                                <h4>CÁC CỬA SỔ NẾN 1 PHÚT GẦN NHẤT (SPARK TUMBLING WINDOW)</h4>
                             </div>
-                            <span class="sentiment-badge" id="sentiment-badge">Đang phân tích...</span>
+                            <span class="subhead-meta">Cập nhật liên tục theo luồng Stream OKX & S3 Parquet Sink</span>
                         </div>
-
-                        <div class="gauge-bar-wrapper">
-                            <div class="gauge-labels">
-                                <span class="label-buy">MUA CHỦ ĐỘNG: <strong id="buy-ratio-text">50.0%</strong></span>
-                                <span class="label-imbalance">Chỉ số Imbalance: <strong id="imbalance-val">0.00</strong></span>
-                                <span class="label-sell">BÁN CHỦ ĐỘNG: <strong id="sell-ratio-text">50.0%</strong></span>
-                            </div>
-                            <div class="gauge-track">
-                                <div class="gauge-fill-buy" id="gauge-fill-buy" style="width: 50%;"></div>
-                                <div class="gauge-fill-sell" id="gauge-fill-sell" style="width: 50%;"></div>
-                                <div class="gauge-center-line"></div>
-                            </div>
-                        </div>
-
-                        <div class="orderflow-metrics-row">
-                            <div class="of-metric">
-                                <span class="of-label">Khối lượng Mua</span>
-                                <span class="of-val buy-color" id="of-buy-vol">0.00</span>
-                            </div>
-                            <div class="of-metric">
-                                <span class="of-label">Khối lượng Bán</span>
-                                <span class="of-val sell-color" id="of-sell-vol">0.00</span>
-                            </div>
-                            <div class="of-metric">
-                                <span class="of-label">Giá trị Mua (USD)</span>
-                                <span class="of-val buy-color" id="of-buy-val">$0</span>
-                            </div>
-                            <div class="of-metric">
-                                <span class="of-label">Giá trị Bán (USD)</span>
-                                <span class="of-val sell-color" id="of-sell-val">$0</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- RIGHT COLUMN: DERIVATIVES & WHALE RADAR -->
-                <div class="sidebar-section">
-                    <!-- DERIVATIVES SENTIMENT CARD -->
-                    <div class="card-panel derivatives-card">
-                        <div class="panel-header">
-                            <div class="title-with-badge">
-                                <span class="panel-icon">📊</span>
-                                <h3>TÂM LÝ PHÁI SINH (DERIVATIVES)</h3>
-                            </div>
-                            <span class="time-badge">8h Interval</span>
-                        </div>
-
-                        <div class="deriv-grid">
-                            <div class="deriv-item">
-                                <span class="d-label">Funding Rate (8h)</span>
-                                <span class="d-value highlight" id="deriv-funding">0.0100%</span>
-                                <span class="d-sub" id="deriv-funding-state">Long trả Short</span>
-                            </div>
-                            <div class="deriv-item">
-                                <span class="d-label">APY Dự phóng Năm</span>
-                                <span class="d-value" id="deriv-apy">10.95%</span>
-                                <span class="d-sub">Lãi suất năm</span>
-                            </div>
-                            <div class="deriv-item full-width">
-                                <div class="d-row">
-                                    <span class="d-label">Hợp đồng mở (Open Interest)</span>
-                                    <span class="d-value" id="deriv-oi-usd">$0.0M</span>
-                                </div>
-                                <div class="oi-coins-sub" id="deriv-oi-coins">0 contracts</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- REAL-TIME ACTIONABLE SIGNALS HUB (STREAMING LAYER) -->
-                    <div class="card-panel real-time-signals-card" id="real-time-signals-panel">
-                        <div class="panel-header">
-                            <div class="title-with-badge">
-                                <span class="panel-icon">⚡</span>
-                                <h3>QUYẾT ĐỊNH GIAO DỊCH TỨC THỜI (STREAMING)</h3>
-                            </div>
-                            <span class="badge-tag urgency-badge" id="signal-urgency">NORMAL</span>
-                        </div>
-                        <div class="signal-body">
-                            <div class="signal-main-action" id="signal-action-box">
-                                <span class="signal-icon" id="signal-icon">⏱️</span>
-                                <div class="signal-text-block">
-                                    <div class="signal-action-title" id="signal-action-title">Đang phân tích luồng...</div>
-                                    <div class="signal-action-desc" id="signal-action-desc">Thu thập lệnh khớp và đo lường áp lực tức thời...</div>
-                                </div>
-                            </div>
-                            <div class="signal-metrics-row">
-                                <div class="sig-metric">
-                                    <span class="sig-lbl">Áp Lực Sổ Lệnh</span>
-                                    <strong class="sig-val" id="sig-imbalance">0.0%</strong>
-                                </div>
-                                <div class="sig-metric">
-                                    <span class="sig-lbl">Cá Mập Mua</span>
-                                    <strong class="sig-val" id="sig-whale-buys">0 lệnh</strong>
-                                </div>
-                                <div class="sig-metric">
-                                    <span class="sig-lbl">Cá Mập Xả</span>
-                                    <strong class="sig-val" id="sig-whale-sells">0 lệnh</strong>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- LIVE WHALE ALERT RADAR -->
-                    <div class="card-panel whale-radar-card">
-                        <div class="panel-header">
-                            <div class="title-with-badge">
-                                <span class="panel-icon">🐋</span>
-                                <h3>RADAR CÁ MẬP (WHALE ALERTS)</h3>
-                            </div>
-                            <div class="whale-header-actions">
-                                <span class="badge-whale-count" id="whale-count">0 Lệnh lớn</span>
-                            </div>
-                        </div>
-
-                        <div class="whale-filter-strip">
-                            <button class="tier-filter-btn active" data-tier="all">Tất cả (&ge; $500K)</button>
-                            <button class="tier-filter-btn" data-tier="mega">Mega (&ge; $2M)</button>
-                            <button class="tier-filter-btn" data-tier="whale">Big Whale ($1M - $2M)</button>
-                            <button class="tier-filter-btn" data-tier="large">Whale ($500K - $1M)</button>
-                        </div>
-
-                        <div class="whale-table-wrapper">
-                            <table class="whale-table">
+                        <div class="table-responsive">
+                            <table class="quant-table mini-table">
                                 <thead>
                                     <tr>
-                                        <th>Cặp / Giờ</th>
-                                        <th>Chiều</th>
-                                        <th>Giá</th>
-                                        <th>Giá trị (USD)</th>
-                                        <th>Cấp độ</th>
+                                        <th>Thời Gian (UTC)</th>
+                                        <th>Giá Mở (Open)</th>
+                                        <th>Giá Cao (High)</th>
+                                        <th>Giá Thấp (Low)</th>
+                                        <th>Giá Đóng (Close)</th>
+                                        <th>Khối Lượng</th>
+                                        <th>VWAP</th>
+                                        <th>Dải &plusmn;2&sigma; (Low / High)</th>
+                                        <th>Tích Lũy CVD</th>
+                                        <th>Cán Cân (Imbalance)</th>
+                                        <th>Tổng Giá Trị (USD)</th>
                                     </tr>
                                 </thead>
-                                <tbody id="whale-table-body">
+                                <tbody id="recent-candles-tbody">
                                     <tr>
-                                        <td colspan="5" class="empty-state">Đang quét dòng tiền cá mập...</td>
+                                        <td colspan="11" class="empty-state">Đang tải danh sách nến gần nhất...</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -366,7 +277,669 @@
         </main>
 
         <!-- =================================================================== -->
-        <!-- TAB 2: DATA WAREHOUSE & STAR SCHEMA EXPLORER                        -->
+        <!-- TAB 2: ÁP LỰC CUNG CẦU & CẤU TRÚC VI MÔ (ORDER FLOW IMBALANCE)       -->
+        <!-- =================================================================== -->
+        <main class="tab-pane" id="tab-orderflow">
+            <div class="orderflow-page-layout">
+                <!-- TOP 4 KPI CARDS -->
+                <div class="of-kpi-grid">
+                    <div class="of-kpi-card buy-border">
+                        <div class="kpi-icon-box buy-bg">🟢</div>
+                        <div class="kpi-info-box">
+                            <span class="kpi-title">Mua Chủ Động (Taker Buy)</span>
+                            <div class="kpi-num buy-color" id="of-card-buy-vol">0.0000</div>
+                            <span class="kpi-sub" id="of-card-buy-val">$0 USD</span>
+                        </div>
+                        <span class="kpi-pct-badge buy-badge" id="of-card-buy-pct">50.0%</span>
+                    </div>
+
+                    <div class="of-kpi-card sell-border">
+                        <div class="kpi-icon-box sell-bg">🔴</div>
+                        <div class="kpi-info-box">
+                            <span class="kpi-title">Bán Chủ Động (Taker Sell)</span>
+                            <div class="kpi-num sell-color" id="of-card-sell-vol">0.0000</div>
+                            <span class="kpi-sub" id="of-card-sell-val">$0 USD</span>
+                        </div>
+                        <span class="kpi-pct-badge sell-badge" id="of-card-sell-pct">50.0%</span>
+                    </div>
+
+                    <div class="of-kpi-card delta-border">
+                        <div class="kpi-icon-box delta-bg">⚖️</div>
+                        <div class="kpi-info-box">
+                            <span class="kpi-title">Dòng Tiền Mua Ròng (Net Delta)</span>
+                            <div class="kpi-num" id="of-card-net-delta">$0</div>
+                            <span class="kpi-sub" id="of-card-net-vol">0.00 Coin Delta</span>
+                        </div>
+                    </div>
+
+                    <div class="of-kpi-card sentiment-border">
+                        <div class="kpi-icon-box sentiment-bg">⚡</div>
+                        <div class="kpi-info-box">
+                            <span class="kpi-title">Chỉ Số Imbalance & Trạng Thái</span>
+                            <div class="kpi-num" id="of-card-imbalance">0.0000</div>
+                            <span class="kpi-sub" id="of-card-sentiment">Neutral (Cân bằng)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ORDER FLOW PRESSURE GAUGE CARD -->
+                <div class="card-panel of-gauge-panel">
+                    <div class="panel-header">
+                        <div class="title-with-badge">
+                            <span class="panel-icon">⚖️</span>
+                            <div>
+                                <h3>CÁN CÂN ÁP LỰC MUA / BÁN TỨC THỜI (ORDER FLOW IMBALANCE)</h3>
+                                <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
+                                    Tính toán từ 100 lệnh khớp liên tục mới nhất trên sàn OKX qua Spark Structured Streaming
+                                </p>
+                            </div>
+                        </div>
+                        <span class="sentiment-badge" id="sentiment-badge">Đang phân tích...</span>
+                    </div>
+
+                    <div class="gauge-bar-wrapper large-gauge">
+                        <div class="gauge-labels">
+                            <span class="label-buy">MUA CHỦ ĐỘNG: <strong id="buy-ratio-text">50.0%</strong></span>
+                            <span class="label-imbalance">Chỉ số Imbalance: <strong id="imbalance-val">0.00</strong></span>
+                            <span class="label-sell">BÁN CHỦ ĐỘNG: <strong id="sell-ratio-text">50.0%</strong></span>
+                        </div>
+                        <div class="gauge-track">
+                            <div class="gauge-fill-buy" id="gauge-fill-buy" style="width: 50%;"></div>
+                            <div class="gauge-fill-sell" id="gauge-fill-sell" style="width: 50%;"></div>
+                            <div class="gauge-center-line"></div>
+                        </div>
+                    </div>
+
+                    <div class="orderflow-metrics-row">
+                        <div class="of-metric">
+                            <span class="of-label">Khối lượng Mua</span>
+                            <span class="of-val buy-color" id="of-buy-vol">0.00</span>
+                        </div>
+                        <div class="of-metric">
+                            <span class="of-label">Khối lượng Bán</span>
+                            <span class="of-val sell-color" id="of-sell-vol">0.00</span>
+                        </div>
+                        <div class="of-metric">
+                            <span class="of-label">Giá trị Mua (USD)</span>
+                            <span class="of-val buy-color" id="of-buy-val">$0</span>
+                        </div>
+                        <div class="of-metric">
+                            <span class="of-label">Giá trị Bán (USD)</span>
+                            <span class="of-val sell-color" id="of-sell-val">$0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STREAMING ANOMALY & ABSORPTION DETECTOR STRIP (MODULE 2) -->
+                <div class="of-anomaly-strip">
+                    <div class="anomaly-card">
+                        <div class="anomaly-header">
+                            <span class="anomaly-icon">🧊</span>
+                            <div>
+                                <span class="anomaly-title">Hấp Thụ Thanh Khoản (Liquidity Absorption)</span>
+                                <p class="anomaly-sub" id="of-absorption-desc">Cung cầu khớp lệnh tự nhiên</p>
+                            </div>
+                        </div>
+                        <span class="anomaly-badge normal" id="of-absorption-badge">NORMAL</span>
+                    </div>
+
+                    <div class="anomaly-card">
+                        <div class="anomaly-header">
+                            <span class="anomaly-icon">⚡</span>
+                            <div>
+                                <span class="anomaly-title">Đột Biến Khối Lượng (Volume Shock Z-Score)</span>
+                                <p class="anomaly-sub" id="of-shock-desc">Phát hiện lệnh đột biến thanh khoản</p>
+                            </div>
+                        </div>
+                        <div class="shock-badge-box">
+                            <span class="anomaly-badge normal" id="of-shock-badge">NORMAL</span>
+                            <span class="shock-zscore" id="of-shock-val">Z: 0.00</span>
+                        </div>
+                    </div>
+
+                    <div class="anomaly-card">
+                        <div class="anomaly-header">
+                            <span class="anomaly-icon">🌊</span>
+                            <div>
+                                <span class="anomaly-title">Tích Lũy Delta Tức Thời (Window CVD)</span>
+                                <p class="anomaly-sub">Chênh lệch khối lượng Mua - Bán chủ động</p>
+                            </div>
+                        </div>
+                        <span class="cvd-pill" id="of-cvd-pill">+0.0000 Coin</span>
+                    </div>
+                </div>
+
+                <!-- ORDER FLOW VISUALIZATIONS ROW -->
+                <div class="analytics-grid">
+                    <!-- CHART 1: BUY VS SELL RATIO ACROSS ASSETS -->
+                    <div class="chart-card">
+                        <div class="chart-card-header">
+                            <div class="title-with-badge">
+                                <span class="panel-icon">⚖️</span>
+                                <h3>TỶ LỆ LỆNH MUA VS BÁN CHỦ ĐỘNG BTC-USDT (%)</h3>
+                            </div>
+                            <span class="badge-tag">Order Flow Pressure</span>
+                        </div>
+                        <div class="chart-canvas-box">
+                            <canvas id="chart-orderflow-ratio"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- CHART 2: TURNOVER COMPARISON -->
+                    <div class="chart-card">
+                        <div class="chart-card-header">
+                            <div class="title-with-badge">
+                                <span class="panel-icon">📊</span>
+                                <h3>TỔNG GIÁ TRỊ GIAO DỊCH BTC-USDT 24H (USD)</h3>
+                            </div>
+                            <span class="badge-tag">BTC-USDT Turnover</span>
+                        </div>
+                        <div class="chart-canvas-box">
+                            <canvas id="chart-asset-turnover"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ORDER FLOW HISTORICAL VIEW TABLE -->
+                <div class="card-panel of-table-panel">
+                    <div class="panel-header">
+                        <div class="title-with-badge">
+                            <span class="panel-icon">📜</span>
+                            <h3>CÁN CÂN DÒNG TIỀN THỜI GIAN THỰC BTC-USDT (POSTGRESQL DW VIEW)</h3>
+                        </div>
+                        <span class="badge-tag">vw_order_flow_pressure</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="quant-table">
+                            <thead>
+                                <tr>
+                                    <th>Cặp Tiền</th>
+                                    <th>Khối Lượng Mua</th>
+                                    <th>Khối Lượng Bán</th>
+                                    <th>Tỷ Lệ Mua / Bán</th>
+                                    <th>Chỉ Số Imbalance</th>
+                                    <th>Tâm Lý Áp Lực</th>
+                                </tr>
+                            </thead>
+                            <tbody id="of-summary-tbody">
+                                <tr>
+                                    <td colspan="6" class="empty-state">Đang tải dữ liệu áp lực cung cầu từ Data Warehouse...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- =================================================================== -->
+        <!-- TAB 3: RADAR CÁ MẬP & THEO DÕI DÒNG TIỀN TỔ CHỨC (WHALE TRACKER)    -->
+        <!-- =================================================================== -->
+        <main class="tab-pane" id="tab-whales">
+            <div class="whale-page-layout">
+                <!-- TOP 4 KPI CARDS -->
+                <div class="whale-kpi-grid">
+                    <div class="whale-kpi-card gold">
+                        <span class="kpi-icon">💰</span>
+                        <div class="kpi-info">
+                            <span class="kpi-title">Tổng Giá Trị Cá Mập</span>
+                            <span class="kpi-val" id="whale-kpi-turnover">$0.0M</span>
+                            <span class="kpi-sub">Lệnh &ge; $500K</span>
+                        </div>
+                    </div>
+                    <div class="whale-kpi-card purple">
+                        <span class="kpi-icon">🚨</span>
+                        <div class="kpi-info">
+                            <span class="kpi-title">Lệnh Lớn Nhất Hôm Nay</span>
+                            <span class="kpi-val" id="whale-kpi-max-trade">$0.0M</span>
+                            <span class="kpi-sub" id="whale-kpi-max-sym">BTC-USDT</span>
+                        </div>
+                    </div>
+                    <div class="whale-kpi-card cyan">
+                        <span class="kpi-icon">🐋</span>
+                        <div class="kpi-info">
+                            <span class="kpi-title">Số Giao Dịch Cá Mập</span>
+                            <span class="kpi-val" id="whale-kpi-total-count">0</span>
+                            <span class="kpi-sub">Giao dịch đã ghi nhận</span>
+                        </div>
+                    </div>
+                    <div class="whale-kpi-card green">
+                        <span class="kpi-icon">🎯</span>
+                        <div class="kpi-info">
+                            <span class="kpi-title">Cá Mập Mua vs Bán</span>
+                            <span class="kpi-val" id="whale-kpi-ratio">0 Mua / 0 Bán</span>
+                            <span class="kpi-sub" id="whale-kpi-sentiment">Đang phân tích</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MAIN WHALE WORKSPACE: DISTRIBUTION CHART & LIVE FEED TAPE -->
+                <div class="whale-workspace-grid">
+                    <!-- LEFT COLUMN: WHALE ANALYTICS & STATS -->
+                    <div class="whale-left-col">
+                        <div class="chart-card">
+                            <div class="chart-card-header">
+                                <div class="title-with-badge">
+                                    <span class="panel-icon">📊</span>
+                                    <h3>CƠ CẤU GIÁ TRỊ CÁ MẬP THEO CẤP ĐỘ</h3>
+                                </div>
+                                <span class="badge-tag">PostgreSQL View</span>
+                            </div>
+                            <div class="chart-canvas-box small-box">
+                                <canvas id="chart-whale-distribution"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="card-panel whale-info-panel">
+                            <div class="panel-header">
+                                <div class="title-with-badge">
+                                    <span class="panel-icon">💡</span>
+                                    <h3>QUY CHUẨN PHÂN HẠNG CÁ MẬP</h3>
+                                </div>
+                            </div>
+                            <ul class="whale-tier-guide">
+                                <li>
+                                    <span class="tier-tag tier-mega">🚨 Mega Whale</span>
+                                    <span>Giá trị lệnh <strong>&ge; $2,000,000 USD</strong>. Gây biến động mạnh tức thời.</span>
+                                </li>
+                                <li>
+                                    <span class="tier-tag tier-whale">⚡ Big Whale</span>
+                                    <span>Giá trị lệnh <strong>$1,000,000 - $2,000,000 USD</strong>. Lệnh gom/xả tổ chức.</span>
+                                </li>
+                                <li>
+                                    <span class="tier-tag tier-large">🐋 Whale</span>
+                                    <span>Giá trị lệnh <strong>$500,000 - $1,000,000 USD</strong>. Dấu chân tạo lập thị trường.</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <!-- TELEGRAM / DISCORD BROADCAST ALERT PREVIEW (MODULE 5.1) -->
+                        <div class="card-panel telegram-preview-panel">
+                            <div class="panel-header">
+                                <div class="title-with-badge">
+                                    <span class="panel-icon">📢</span>
+                                    <div>
+                                        <h3>CẢNH BÁO TELEGRAM / DISCORD BOT</h3>
+                                        <p style="font-size:0.75rem; color:var(--text-muted); margin:0;">Mẫu tin nhắn tự động phát tín hiệu khi Mega Whale xuất hiện</p>
+                                    </div>
+                                </div>
+                                <div class="audio-toggle-wrapper" title="Bật âm thanh cảnh báo khi có Mega Whale >= $2M">
+                                    <label class="toggle-switch small">
+                                        <input type="checkbox" id="whale-audio-toggle">
+                                        <span class="slider"></span>
+                                    </label>
+                                    <span class="audio-label">🔔 Âm thanh</span>
+                                </div>
+                            </div>
+                            <div class="telegram-terminal-box">
+                                <pre id="whale-telegram-preview">Đang quét dòng lệnh cá mập để phát cảnh báo mẫu...</pre>
+                            </div>
+                            <button id="btn-copy-telegram-alert" class="btn-subtle" title="Sao chép nội dung tin nhắn Telegram">
+                                📋 Sao Chép Tin Nhắn Mẫu
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT COLUMN: LIVE WHALE TAPE WITH FILTERS -->
+                    <div class="whale-right-col">
+                        <div class="card-panel whale-radar-card full-height">
+                            <div class="panel-header">
+                                <div class="title-with-badge">
+                                    <span class="panel-icon">🐋</span>
+                                    <h3>BẢNG LỆNH CÁ MẬP KHỚP THỜI GIAN THỰC (WHALE TAPE)</h3>
+                                </div>
+                                <div class="whale-header-actions">
+                                    <span class="badge-whale-count" id="whale-count">0 Lệnh lớn</span>
+                                </div>
+                            </div>
+
+                            <div class="whale-filter-strip">
+                                <div class="tier-buttons-group">
+                                    <button class="tier-filter-btn active" data-tier="all">Tất cả (&ge; $500K)</button>
+                                    <button class="tier-filter-btn" data-tier="mega">🚨 Mega (&ge; $2M)</button>
+                                    <button class="tier-filter-btn" data-tier="whale">⚡ Big Whale ($1M - $2M)</button>
+                                    <button class="tier-filter-btn" data-tier="large">🐋 Whale ($500K - $1M)</button>
+                                </div>
+                                <select id="whale-symbol-filter" class="dw-select" title="Lọc theo Symbol">
+                                    <option value="BTC-USDT" selected>BTC-USDT (Duy nhất)</option>
+                                </select>
+                            </div>
+
+                            <div class="whale-table-wrapper large-table">
+                                <table class="whale-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Cặp / Thời Gian</th>
+                                            <th>Chiều</th>
+                                            <th>Giá Khớp</th>
+                                            <th>Khối Lượng Coin</th>
+                                            <th>Giá Trị (USD)</th>
+                                            <th>Phân Cấp Cá Mập</th>
+                                            <th>Nguồn</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="whale-table-body">
+                                        <tr>
+                                            <td colspan="7" class="empty-state">Đang quét dòng tiền cá mập...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- =================================================================== -->
+        <!-- TAB 4: TÍN HIỆU LƯỚT SÓNG ĐỊNH LƯỢNG THỜI GIAN THỰC (SCALPING)      -->
+        <!-- =================================================================== -->
+        <main class="tab-pane" id="tab-signals">
+            <div class="signals-page-layout">
+                <!-- XGBOOST BTC PRICE DIRECTION HERO BANNER -->
+                <div class="card-panel streaming-banner-card" style="border-left: 4px solid var(--accent-cyan);">
+                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div class="title-with-badge">
+                            <span class="panel-icon">🤖</span>
+                            <div>
+                                <h3>MÔ HÌNH HỌC MÁY XGBOOST: DỰ BÁO XU HƯỚNG GIÁ BTC-USDT (CHU KỲ 5 PHÚT)</h3>
+                                <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
+                                    Mô hình XGBoost Classifier được huấn luyện trên chuỗi thời gian phân đoạn (70% Train / 15% Val / 15% Test) với 18 đặc trưng vi mô & chỉ báo kỹ thuật, dự báo xác suất giá BTC tăng trong 5 phút tới.
+                                </p>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <span class="badge-tag" id="ml-model-badge" style="background:rgba(0,240,255,0.15); color:var(--accent-cyan); font-weight:700; border:1px solid rgba(0,240,255,0.3);">XGBClassifier v1.0.0</span>
+                            <button id="btn-trigger-inference" class="btn-subtle" style="background:var(--accent-cyan); color:#000; font-weight:700; padding:6px 14px; border-radius:6px; cursor:pointer;" title="Chạy suy luận tức thời trên dữ liệu nến mới nhất">
+                                ⚡ Dự Báo Ngay
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XGBOOST PREDICTION & EVALUATION ROW -->
+                <div style="display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:16px; margin-bottom:20px;">
+                    <!-- COL 1: LATEST PREDICTION CARD -->
+                    <div class="card-panel" style="background:var(--bg-card); border-radius:12px; padding:18px; border:1px solid var(--border-color);">
+                        <div class="panel-header" style="margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                            <div class="title-with-badge">
+                                <span class="panel-icon">🔮</span>
+                                <h3 style="font-size:0.95rem; margin:0;">DỰ BÁO XU HƯỚNG HIỆN TẠI (5M)</h3>
+                            </div>
+                            <span class="badge-tag" id="pred-status-tag" style="font-size:0.75rem;">LIVE</span>
+                        </div>
+                        
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                            <div>
+                                <span style="font-size:0.75rem; color:var(--text-muted); display:block;">GIÁ BTC TẠI THỜI ĐIỂM DỰ BÁO</span>
+                                <strong id="pred-current-price" style="font-size:1.4rem; font-family:'JetBrains Mono'; color:var(--text-primary);">$0.00</strong>
+                            </div>
+                            <div id="pred-direction-box" style="padding:8px 16px; border-radius:8px; background:rgba(0,255,136,0.15); border:1px solid var(--accent-green); text-align:center;">
+                                <span style="font-size:0.7rem; color:var(--text-muted); display:block;">XU HƯỚNG 5 PHÚT TỚI</span>
+                                <strong id="pred-direction-label" style="font-size:1.2rem; color:var(--accent-green); font-family:'JetBrains Mono';">--</strong>
+                            </div>
+                        </div>
+
+                        <!-- PROBABILITY BAR -->
+                        <div style="margin-bottom:14px;">
+                            <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:4px;">
+                                <span style="color:var(--accent-green);">Xác suất Tăng P(UP): <strong id="pred-prob-up">0.0%</strong></span>
+                                <span style="color:var(--accent-red);">P(NOT_UP): <strong id="pred-prob-not-up">0.0%</strong></span>
+                            </div>
+                            <div style="width:100%; height:10px; background:rgba(255,255,255,0.1); border-radius:5px; overflow:hidden; display:flex;">
+                                <div id="pred-prob-bar" style="width:50%; height:100%; background:linear-gradient(90deg, var(--accent-cyan), var(--accent-green)); transition:width 0.4s ease;"></div>
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:0.78rem; background:rgba(0,0,0,0.25); padding:10px; border-radius:8px;">
+                            <div>
+                                <span style="color:var(--text-muted);">Mốc nến đầu vào:</span>
+                                <div id="pred-feature-time" style="font-family:'JetBrains Mono'; color:var(--text-secondary);">--:--:--</div>
+                            </div>
+                            <div>
+                                <span style="color:var(--text-muted);">Mốc kết quả dự báo:</span>
+                                <div id="pred-target-time" style="font-family:'JetBrains Mono'; color:var(--accent-yellow);">--:--:-- (+5m)</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- COL 2: MODEL EVALUATION & BASELINE CARD -->
+                    <div class="card-panel" style="background:var(--bg-card); border-radius:12px; padding:18px; border:1px solid var(--border-color);">
+                        <div class="panel-header" style="margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                            <div class="title-with-badge">
+                                <span class="panel-icon">📊</span>
+                                <h3 style="font-size:0.95rem; margin:0;">KẾT QUẢ ĐÁNH GIÁ TRÊN TẬP TEST</h3>
+                            </div>
+                            <span class="badge-tag" style="background:rgba(255,255,255,0.1); color:var(--text-secondary); font-size:0.72rem;">Unseen Chronological</span>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+                            <div style="background:rgba(0,0,0,0.2); padding:8px 12px; border-radius:6px;">
+                                <span style="font-size:0.72rem; color:var(--text-muted); display:block;">ĐỘ CHÍNH XÁC (ACCURACY)</span>
+                                <strong id="eval-accuracy" style="font-size:1.15rem; color:var(--accent-cyan); font-family:'JetBrains Mono';">0.0%</strong>
+                            </div>
+                            <div style="background:rgba(0,0,0,0.2); padding:8px 12px; border-radius:6px;">
+                                <span style="font-size:0.72rem; color:var(--text-muted); display:block;">MAJORITY BASELINE</span>
+                                <strong id="eval-baseline" style="font-size:1.15rem; color:var(--text-secondary); font-family:'JetBrains Mono';">0.0%</strong>
+                            </div>
+                            <div style="background:rgba(0,0,0,0.2); padding:8px 12px; border-radius:6px;">
+                                <span style="font-size:0.72rem; color:var(--text-muted); display:block;">BALANCED ACCURACY</span>
+                                <strong id="eval-bal-acc" style="font-size:1.0rem; color:var(--text-primary); font-family:'JetBrains Mono';">0.0%</strong>
+                            </div>
+                            <div style="background:rgba(0,0,0,0.2); padding:8px 12px; border-radius:6px;">
+                                <span style="font-size:0.72rem; color:var(--text-muted); display:block;">ROC-AUC SCORE</span>
+                                <strong id="eval-roc-auc" style="font-size:1.0rem; color:var(--accent-yellow); font-family:'JetBrains Mono';">0.00</strong>
+                            </div>
+                        </div>
+
+                        <div id="eval-baseline-verdict" style="font-size:0.75rem; padding:6px 10px; border-radius:6px; background:rgba(0,0,0,0.3); color:var(--text-muted); text-align:center;">
+                            Đang tải kết quả so sánh với Baseline...
+                        </div>
+                    </div>
+
+                    <!-- COL 3: TOP FEATURE IMPORTANCE -->
+                    <div class="card-panel" style="background:var(--bg-card); border-radius:12px; padding:18px; border:1px solid var(--border-color);">
+                        <div class="panel-header" style="margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                            <div class="title-with-badge">
+                                <span class="panel-icon">🏆</span>
+                                <h3 style="font-size:0.95rem; margin:0;">TOP ĐẶC TRƯNG QUAN TRỌNG (XGBOOST)</h3>
+                            </div>
+                            <span class="badge-tag" style="font-size:0.72rem;">Gain Ratio</span>
+                        </div>
+
+                        <div id="eval-feature-list" style="display:flex; flex-direction:column; gap:6px; font-size:0.78rem; max-height:165px; overflow-y:auto;">
+                            <span style="color:var(--text-muted);">Đang nạp bảng xếp hạng đặc trưng...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PREDICTION HISTORY VS ACTUAL OUTCOMES TABLE -->
+                <div class="card-panel quant-summary-card" style="margin-bottom:24px;">
+                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div class="title-with-badge">
+                            <span class="panel-icon">📜</span>
+                            <h3>LỊCH SỬ DỰ BÁO & KIỂM CHỨNG THỰC TẾ (FACT_BTC_PREDICTIONS)</h3>
+                        </div>
+                        <span class="badge-tag">Lưu trữ trên PostgreSQL Star Schema</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="quant-table">
+                            <thead>
+                                <tr>
+                                    <th>Thời Điểm Dự Báo</th>
+                                    <th>Giá Vào (Entry)</th>
+                                    <th>Dự Báo Xu Hướng</th>
+                                    <th>Xác Suất P(UP)</th>
+                                    <th>Thời Điểm Kiểm Chứng</th>
+                                    <th>Giá Thực Tế (t+5)</th>
+                                    <th>Kết Quả Thực Tế</th>
+                                    <th>Trạng Thái Kiểm Chứng</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ml-prediction-history-tbody">
+                                <tr>
+                                    <td colspan="8" class="empty-state">Đang nạp lịch sử dự báo từ PostgreSQL DW...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- DEDICATED SCALPING CARD FOR BTC-USDT -->
+                <div class="scalp-cards-grid" id="scalp-cards-grid">
+                    <!-- BTC CARD -->
+                    <div class="scalp-card" id="scalp-card-btc">
+                        <div class="scalp-card-header">
+                            <div class="coin-ident">
+                                <span class="coin-badge btc">BTC</span>
+                                <span class="coin-name">BTC / USDT</span>
+                            </div>
+                            <span class="scalp-urgency-badge" id="btc-urgency-badge">NORMAL</span>
+                        </div>
+                        <div class="scalp-price-row">
+                            <span class="scalp-price" id="btc-scalp-price">$0.00</span>
+                            <span class="scalp-change" id="btc-scalp-change">+0.00%</span>
+                        </div>
+                        <div class="scalp-action-box" id="btc-action-box">
+                            <span class="action-icon" id="btc-action-icon">⏱️</span>
+                            <div class="action-details">
+                                <span class="action-label" id="btc-action-label">Đang phân tích...</span>
+                                <span class="action-sub" id="btc-action-sub">Thu thập luồng lệnh OKX</span>
+                            </div>
+                        </div>
+                        <div class="scalp-indicator-pills">
+                            <div class="ind-pill">
+                                <span class="ind-lbl">Cán Cân Imbalance:</span>
+                                <strong id="btc-ind-imbalance">0.0%</strong>
+                            </div>
+                            <div class="ind-pill">
+                                <span class="ind-lbl">Cá Mập:</span>
+                                <strong id="btc-ind-whales">0 Mua / 0 Bán</strong>
+                            </div>
+                            <div class="ind-pill">
+                                <span class="ind-lbl">Biến Động Parkinson:</span>
+                                <strong id="btc-ind-vol" style="color:var(--accent-yellow);">0.00%</strong>
+                            </div>
+                            <div class="ind-pill">
+                                <span class="ind-lbl">Hấp Thụ / Cảnh Báo:</span>
+                                <strong id="btc-ind-absorption" style="font-size:10px;">NORMAL</strong>
+                            </div>
+                        </div>
+                        <div class="scalp-trade-plan">
+                            <div class="plan-row">
+                                <span class="plan-lbl">Vào Lệnh (Entry):</span>
+                                <span class="plan-val entry" id="btc-plan-entry">~$0.00</span>
+                            </div>
+                            <div class="plan-row">
+                                <span class="plan-lbl">Cắt Lỗ (SL):</span>
+                                <span class="plan-val sl" id="btc-plan-sl">~$0.00 (-0.6%)</span>
+                            </div>
+                            <div class="plan-row">
+                                <span class="plan-lbl">Chốt Lời (TP):</span>
+                                <span class="plan-val tp" id="btc-plan-tp">~$0.00 (+1.5%)</span>
+                            </div>
+                            <div class="plan-meta">
+                                <span>Tỷ lệ Risk : Reward: <strong>1 : 2.5</strong></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- REAL-TIME SIGNALS TABLE -->
+                <div class="card-panel quant-summary-card">
+                    <div class="panel-header">
+                        <div class="title-with-badge">
+                            <span class="panel-icon">📋</span>
+                            <h3>BẢNG TỔNG HỢP TÍN HIỆU ĐỊNH LƯỢNG LƯỚT SÓNG TOÀN DIỆN</h3>
+                        </div>
+                        <span class="badge-tag">Cập nhật mỗi 3s</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="quant-table">
+                            <thead>
+                                <tr>
+                                    <th>Cặp Tiền</th>
+                                    <th>Giá Hiện Tại</th>
+                                    <th>Biến Động 24h</th>
+                                    <th>Cán Cân Lực (Imbalance)</th>
+                                    <th>Khối Lượng Mua</th>
+                                    <th>Khối Lượng Bán</th>
+                                    <th>Cá Mập Mua</th>
+                                    <th>Cá Mập Xả</th>
+                                    <th>Tín Hiệu Hành Động</th>
+                                    <th>Mức Độ Khẩn</th>
+                                    <th>Lý Do Phân Tích</th>
+                                </tr>
+                            </thead>
+                            <tbody id="quant-predictions-tbody">
+                                <tr>
+                                    <td colspan="11" class="empty-state">Đang nạp tín hiệu định lượng thời gian thực...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- DERIVATIVES CONFIRMATION ROW -->
+                <div class="card-panel derivatives-full-card">
+                    <div class="panel-header">
+                        <div class="title-with-badge">
+                            <span class="panel-icon">📊</span>
+                            <h3>XÁC NHẬN TÂM LÝ TỪ THỊ TRƯỜNG PHÁI SINH (FUNDING RATE & OPEN INTEREST)</h3>
+                        </div>
+                        <span class="time-badge">OKX Perpetual Swap 8h</span>
+                    </div>
+                    <div class="deriv-grid large-grid">
+                        <div class="deriv-item">
+                            <span class="d-label">Funding Rate (8h)</span>
+                            <span class="d-value highlight" id="deriv-funding">0.0100%</span>
+                            <span class="d-sub" id="deriv-funding-state">Long trả Short</span>
+                        </div>
+                        <div class="deriv-item">
+                            <span class="d-label">APY Dự Phóng Năm</span>
+                            <span class="d-value" id="deriv-apy">10.95%</span>
+                            <span class="d-sub">Lãi suất hàng năm</span>
+                        </div>
+                        <div class="deriv-item">
+                            <span class="d-label">Hợp Đồng Mở (Open Interest USD)</span>
+                            <span class="d-value" id="deriv-oi-usd">$0.0M</span>
+                            <span class="d-sub" id="deriv-oi-coins">0 contracts</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- WEBHOOK API GATEWAY CARD FOR AUTOMATED TRADING BOTS (MODULE 5.2) -->
+                <div class="card-panel webhook-integration-card" style="margin-top: 16px;">
+                    <div class="panel-header">
+                        <div class="title-with-badge">
+                            <span class="panel-icon">🔌</span>
+                            <div>
+                                <h3>GATEWAY WEBHOOK API CHO BOT GIAO DỊCH TỰ ĐỘNG (SUB-5MS LATENCY)</h3>
+                                <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
+                                    Cung cấp endpoint bảo mật <code>/api/signals/webhook</code> để bot giao dịch (CCXT, Hummingbot, Freqtrade) tự động khớp lệnh.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="header-actions">
+                            <button id="btn-test-webhook" class="btn-primary" style="padding: 6px 14px; font-size: 12px;">
+                                ⚡ Bắn Thử Tín Hiệu Webhook
+                            </button>
+                        </div>
+                    </div>
+                    <div class="webhook-terminal-container">
+                        <div class="webhook-bar">
+                            <span class="webhook-method">POST</span>
+                            <span class="webhook-endpoint">http://127.0.0.1:5000/api/signals/webhook?symbol=<span id="webhook-sym-badge">BTC-USDT</span></span>
+                            <span class="webhook-status-badge">Latency: &lt; 4ms</span>
+                        </div>
+                        <pre class="webhook-json-box" id="webhook-json-preview">Nhấn nút "Bắn Thử Tín Hiệu Webhook" để xem cấu trúc JSON đẩy sang bot tự động...</pre>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- =================================================================== -->
+        <!-- TAB 5: DATA WAREHOUSE & STAR SCHEMA EXPLORER                        -->
         <!-- =================================================================== -->
         <main class="tab-pane" id="tab-warehouse">
             <div class="dw-explorer-layout">
@@ -413,6 +986,18 @@
                             <button class="dw-view-btn active" data-table="vw_whale_trades">
                                 <span>🐋</span> vw_whale_trades
                             </button>
+                            <button class="dw-view-btn" data-table="vw_rolling_5m_metrics">
+                                <span>⚡</span> vw_rolling_5m
+                            </button>
+                            <button class="dw-view-btn" data-table="vw_order_flow_pressure">
+                                <span>⚖️</span> vw_order_flow
+                            </button>
+                            <button class="dw-view-btn" data-table="vw_streaming_volatility">
+                                <span>🌊</span> vw_volatility
+                            </button>
+                            <button class="dw-view-btn" data-table="vw_streaming_pipeline_telemetry">
+                                <span>📡</span> vw_telemetry
+                            </button>
                             <button class="dw-view-btn" data-table="vw_hourly_market_summary">
                                 <span>⏱️</span> vw_hourly_summary
                             </button>
@@ -428,35 +1013,23 @@
                             <button class="dw-view-btn" data-table="vw_yearly_market_summary">
                                 <span>🎆</span> vw_yearly_summary
                             </button>
-                            <button class="dw-view-btn" data-table="vw_order_flow_pressure">
-                                <span>⚖️</span> vw_order_flow
-                            </button>
                             <button class="dw-view-btn" data-table="fact_crypto_trades">
                                 <span>📜</span> fact_crypto_trades
                             </button>
                             <button class="dw-view-btn" data-table="fact_crypto_1m_candles">
                                 <span>🕯️</span> fact_1m_candles
                             </button>
-                            <button class="dw-view-btn" data-table="fact_market_predictions">
-                                <span>🔮</span> fact_predictions
-                            </button>
-                            <button class="dw-view-btn" data-table="fact_crypto_funding_rates">
-                                <span>📊</span> fact_funding_rates
-                            </button>
-                            <button class="dw-view-btn" data-table="fact_crypto_open_interest">
-                                <span>📈</span> fact_open_interest
-                            </button>
                             <button class="dw-view-btn" data-table="dim_symbol">
                                 <span>🏷️</span> dim_symbol
+                            </button>
+                            <button class="dw-view-btn" data-table="dim_alert_tier">
+                                <span>🚨</span> dim_alert_tier
                             </button>
                         </div>
 
                         <div class="dw-actions-strip">
                             <select id="dw-filter-symbol" class="dw-select" title="Lọc theo cặp tiền">
-                                <option value="ALL">Tất cả Symbol</option>
-                                <option value="BTC-USDT">BTC-USDT</option>
-                                <option value="ETH-USDT">ETH-USDT</option>
-                                <option value="SOL-USDT">SOL-USDT</option>
+                                <option value="BTC-USDT" selected>BTC-USDT (Duy nhất)</option>
                             </select>
 
                             <select id="dw-limit-select" class="dw-select" title="Số dòng hiển thị">
@@ -503,222 +1076,6 @@
         </main>
 
         <!-- =================================================================== -->
-        <!-- TAB 3: BÁO CÁO PHÂN TÍCH ĐỊNH LƯỢNG (QUANT ANALYTICS)              -->
-        <!-- =================================================================== -->
-        <main class="tab-pane" id="tab-analytics">
-            <div class="analytics-layout">
-                <!-- BATCH PIPELINE & PREDICTION CONTROL CENTER -->
-                <div class="card-panel batch-control-card" id="batch-control-card">
-                    <div class="panel-header">
-                        <div class="title-with-badge">
-                            <span class="panel-icon">🕹️</span>
-                            <div>
-                                <h3>TRUNG TÂM ĐIỀU KHIỂN LUỒNG BATCH & MÔ HÌNH DỰ BÁO</h3>
-                                <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
-                                    Khởi chạy cào nến lịch sử, tổng hợp chuỗi thời gian Ngày/Tuần/Tháng/Năm và chạy lượng hóa dự báo cho chu kỳ tiếp theo (100% độc lập với Streaming).
-                                </p>
-                            </div>
-                        </div>
-                        <div class="batch-job-indicator" id="batch-job-indicator">
-                            <span class="status-dot" id="batch-status-dot"></span>
-                            <span id="batch-status-text">Sẵn sàng nhận lệnh</span>
-                        </div>
-                    </div>
-
-                    <!-- ACTION BUTTONS ROW -->
-                    <div class="batch-action-buttons">
-                        <button class="btn-batch-action" data-action="backfill" id="btn-batch-backfill" title="Cào nến 1m lịch sử 7 ngày qua từ OKX nạp vào Batch Data Lake">
-                            <span class="btn-b-icon">📥</span>
-                            <div class="btn-b-text">
-                                <strong>Cào Nến Lịch Sử</strong>
-                                <small>OKX 7 Ngày &rarr; S3</small>
-                            </div>
-                        </button>
-
-                        <button class="btn-batch-action" data-action="derivatives" id="btn-batch-derivatives" title="Cào chỉ số phái sinh: Funding Rate, Open Interest, Long/Short">
-                            <span class="btn-b-icon">📊</span>
-                            <div class="btn-b-text">
-                                <strong>Cào Phái Sinh</strong>
-                                <small>Funding &bull; OI &bull; L/S</small>
-                            </div>
-                        </button>
-
-                        <button class="btn-batch-action" data-action="analytics" id="btn-batch-analytics" title="Tổng hợp nến Ngày, Tuần, Tháng, Năm và xuất CSV vào data/exports/">
-                            <span class="btn-b-icon">⚙️</span>
-                            <div class="btn-b-text">
-                                <strong>Tổng Hợp Nến Batch</strong>
-                                <small>Ngày/Tuần/Tháng/Năm</small>
-                            </div>
-                        </button>
-
-                        <button class="btn-batch-action highlight" data-action="predict" id="btn-batch-predict" title="Chạy mô hình hồi quy lượng hóa dự đoán nến Ngày, Tuần, Tháng, Năm kế tiếp">
-                            <span class="btn-b-icon">🔮</span>
-                            <div class="btn-b-text">
-                                <strong>Chạy Dự Báo Kế Tiếp</strong>
-                                <small>Target &bull; Vol &bull; Signal</small>
-                            </div>
-                        </button>
-
-                        <button class="btn-batch-action pipeline-btn" data-action="pipeline" id="btn-batch-pipeline" title="1-Click: Cào lịch sử -> Cào phái sinh -> Batch Analytics -> Dự báo -> Xuất CSV">
-                            <span class="btn-b-icon">🚀</span>
-                            <div class="btn-b-text">
-                                <strong>1-Click Batch Pipeline</strong>
-                                <small>Chạy trọn gói 4 bước</small>
-                            </div>
-                        </button>
-                    </div>
-
-                    <!-- REAL-TIME CONSOLE OUTPUT DRAWER -->
-                    <div class="batch-console-box" id="batch-console-box">
-                        <div class="console-header">
-                            <span><span class="console-prompt">&gt;</span> Nhật ký thực thi tác vụ Batch (Live Logs)</span>
-                            <button class="btn-console-clear" id="btn-console-clear" title="Xóa nhật ký">Dọn log</button>
-                        </div>
-                        <div class="console-content" id="batch-console-content">
-                            <div class="log-line info">Hệ thống Batch Layer sẵn sàng. Nhấn một trong các nút phía trên để thực thi.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- CHART GRID ROW 1 -->
-                <div class="analytics-grid">
-                    <!-- CHART 1: WHALE TURNOVER BREAKDOWN -->
-                    <div class="chart-card">
-                        <div class="chart-card-header">
-                            <div class="title-with-badge">
-                                <span class="panel-icon">💰</span>
-                                <h3>CƠ CẤU GIÁ TRỊ GIAO DỊCH CÁ MẬP (WHALE TURNOVER)</h3>
-                            </div>
-                            <span class="badge-tag">PostgreSQL View</span>
-                        </div>
-                        <div class="chart-canvas-box">
-                            <canvas id="chart-whale-distribution"></canvas>
-                        </div>
-                    </div>
-
-                    <!-- CHART 2: 3-ASSET TURNOVER COMPARISON -->
-                    <div class="chart-card">
-                        <div class="chart-card-header">
-                            <div class="title-with-badge">
-                                <span class="panel-icon">📊</span>
-                                <h3>SO SÁNH TỔNG GIÁ TRỊ GIAO DỊCH (TURNOVER USD)</h3>
-                            </div>
-                            <span class="badge-tag">24H Aggregation</span>
-                        </div>
-                        <div class="chart-canvas-box">
-                            <canvas id="chart-asset-turnover"></canvas>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- CHART GRID ROW 2 -->
-                <div class="analytics-grid">
-                    <!-- CHART 3: BUY VS SELL RATIO -->
-                    <div class="chart-card">
-                        <div class="chart-card-header">
-                            <div class="title-with-badge">
-                                <span class="panel-icon">⚖️</span>
-                                <h3>TỶ LỆ LỆNH MUA CHỦ ĐỘNG VS BÁN CHỦ ĐỘNG (%)</h3>
-                            </div>
-                            <span class="badge-tag">Order Flow Pressure</span>
-                        </div>
-                        <div class="chart-canvas-box">
-                            <canvas id="chart-orderflow-ratio"></canvas>
-                        </div>
-                    </div>
-
-                    <!-- CHART 4: VOLATILITY & RETURN COMPARISON -->
-                    <div class="chart-card">
-                        <div class="chart-card-header">
-                            <div class="title-with-badge">
-                                <span class="panel-icon">📈</span>
-                                <h3>ĐỘ BIẾN ĐỘNG (VOLATILITY) & TỶ SUẤT SINH LỜI (%)</h3>
-                            </div>
-                            <span class="badge-tag">Batch Multi-Timeframe</span>
-                        </div>
-                        <div class="chart-canvas-box">
-                            <canvas id="chart-volatility"></canvas>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- FINANCIAL SUMMARY TABLE -->
-                <div class="card-panel quant-summary-card">
-                    <div class="panel-header">
-                        <div class="title-with-badge">
-                            <span class="panel-icon">📑</span>
-                            <h3>BẢNG TỔNG HỢP CHỈ SỐ ĐỊNH LƯỢNG THỊ TRƯỜNG TOÀN DIỆN</h3>
-                        </div>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="quant-table">
-                            <thead>
-                                <tr>
-                                    <th>Cặp Tiền</th>
-                                    <th>Giá Mở (Open)</th>
-                                    <th>Giá Đóng (Close)</th>
-                                    <th>VWAP Bình Quân</th>
-                                    <th>Biến Động (Volatility)</th>
-                                    <th>Tỷ Suất (Return)</th>
-                                    <th>Tổng Giá Trị (USD)</th>
-                                    <th>Tâm Lý Áp Lực</th>
-                                </tr>
-                            </thead>
-                            <tbody id="quant-summary-tbody">
-                                <tr>
-                                    <td colspan="8" class="empty-state">Đang tính toán ma trận định lượng...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- QUANT PREDICTIONS & FORECASTING CARD (BATCH LAYER) -->
-                <div class="card-panel quant-summary-card" id="quant-predictions-card" style="margin-top: 1.5rem;">
-                    <div class="panel-header">
-                        <div class="title-with-badge">
-                            <span class="panel-icon">🔮</span>
-                            <div>
-                                <h3>MÔ HÌNH DỰ BÁO ĐỊNH LƯỢNG CHU KỲ KẾ TIẾP (BATCH LAYER QUANT FORECAST)</h3>
-                                <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">
-                                    Phân tích chuỗi thời gian nến Ngày, Tuần, Tháng, Năm để dự báo xu hướng & mục tiêu giá chu kỳ tiếp theo (Tách biệt với Streaming).
-                                </p>
-                            </div>
-                        </div>
-                        <div class="header-actions">
-                            <span class="badge-tag" style="background: rgba(0, 210, 255, 0.15); color: var(--accent-cyan);">
-                                Model: Linear Trend & Volatility Bands
-                            </span>
-                        </div>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="quant-table">
-                            <thead>
-                                <tr>
-                                    <th>Cặp Tiền</th>
-                                    <th>Khung Dự Báo</th>
-                                    <th>Giá Gốc (Base)</th>
-                                    <th>Giá Mục Tiêu (Predicted)</th>
-                                    <th>Dải Dự Phóng (Low - High)</th>
-                                    <th>Tỷ Suất Kỳ Vọng</th>
-                                    <th>Độ Biến Động</th>
-                                    <th>Xu Hướng</th>
-                                    <th>Khuyến Nghị Chiến Lược</th>
-                                    <th>Độ Tin Cậy</th>
-                                </tr>
-                            </thead>
-                            <tbody id="quant-predictions-tbody">
-                                <tr>
-                                    <td colspan="10" class="empty-state">Đang tải dữ liệu dự báo từ Batch Layer...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </main>
-
-        <!-- =================================================================== -->
         <!-- TAB 4: GIÁM SÁT KIẾN TRÚC PIPELINE (ARCHITECTURE & TELEMETRY)      -->
         <!-- =================================================================== -->
         <main class="tab-pane" id="tab-pipeline">
@@ -737,7 +1094,7 @@
                             <div class="node-badge status-healthy">CONNECTED</div>
                             <h4>OKX WebSocket</h4>
                             <p>Multi-Stream Ingestion</p>
-                            <span class="node-meta">BTC, ETH, SOL</span>
+                            <span class="node-meta">BTC-USDT (Primary Stream)</span>
                         </div>
 
                         <div class="flow-connector"><span class="flow-arrow">&rarr;</span></div>
@@ -748,7 +1105,7 @@
                             <div class="node-badge status-healthy">PORT 9092</div>
                             <h4>Apache Kafka</h4>
                             <p>Topic: crypto-trades</p>
-                            <span class="node-meta">3 Partitions (Symbol Key)</span>
+                            <span class="node-meta">Partition 0 (BTC-USDT Dedicated)</span>
                         </div>
 
                         <div class="flow-connector"><span class="flow-arrow">&rarr;</span></div>
@@ -808,7 +1165,7 @@
                             <li><span>Chế độ:</span> <strong>KRaft Mode (3.9+)</strong></li>
                             <li><span>Cluster Endpoint:</span> <strong>localhost:9092</strong></li>
                             <li><span>Chủ đề (Topic):</span> <strong>crypto-trades</strong></li>
-                            <li><span>Phân vùng (Partitions):</span> <strong>3 (P0: BTC, P1: ETH, P2: SOL)</strong></li>
+                            <li><span>Phân vùng (Partitions):</span> <strong>Partition 0 (BTC-USDT Chuyên biệt)</strong></li>
                             <li><span>Đảm bảo thứ tự:</span> <strong>Strict Partition Ordering</strong></li>
                         </ul>
                     </div>
@@ -830,14 +1187,15 @@
                     <div class="telemetry-card">
                         <div class="t-card-header">
                             <span class="t-icon">☁️</span>
-                            <h4>AWS S3 Data Lake</h4>
+                            <h4>AWS S3 Medallion Lakehouse</h4>
                         </div>
                         <ul class="t-list">
                             <li><span>Định dạng tệp:</span> <strong>Apache Parquet (Snappy)</strong></li>
-                            <li><span>Đường dẫn Raw:</span> <code>crypto/raw/trades/</code></li>
-                            <li><span>Đường dẫn Aggregated:</span> <code>crypto/processed/trades_1m/</code></li>
-                            <li><span>Phân vùng S3:</span> <strong>symbol=... / trade_date=...</strong></li>
-                            <li><span>Đọc Batch:</span> <strong>PySpark Batch Reader & Aggregator</strong></li>
+                            <li><span>Bronze (Raw Kafka):</span> <code>crypto/bronze/trades/</code></li>
+                            <li><span>Silver (Cleaned):</span> <code>crypto/silver/trades/</code></li>
+                            <li><span>Gold (1m OHLCV):</span> <code>crypto/gold/candles_1m/</code></li>
+                            <li><span>ML Model Registry:</span> <code>crypto/models/v2.0.0/</code></li>
+                            <li><span>Phân vùng S3:</span> <strong>symbol=BTC-USDT / trade_date=...</strong></li>
                         </ul>
                     </div>
 

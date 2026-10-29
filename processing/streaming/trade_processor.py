@@ -55,9 +55,13 @@ KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC_TRADES", os.getenv("KAFKA_TOPIC", "crypto-trades"))
 
 STORAGE_DESTINATION = os.getenv("STORAGE_DESTINATION", "s3").lower()
-S3_BUCKET = os.getenv("S3_BUCKET_NAME", "crypto-bigdata-lakehouse")
-S3_RAW_PATH = os.getenv("S3_STREAMING_RAW_PATH", f"s3a://{S3_BUCKET}/crypto/streaming/trades")
-S3_PROCESSED_PATH = os.getenv("S3_STREAMING_CANDLES_PATH", f"s3a://{S3_BUCKET}/crypto/streaming/candles_1m")
+S3_RAW_PATH = os.getenv("S3_STREAMING_RAW_PATH", os.getenv("S3_RAW_PATH", f"s3a://{S3_BUCKET}/crypto/streaming/trades"))
+if "${S3_BUCKET_NAME}" in S3_RAW_PATH:
+    S3_RAW_PATH = S3_RAW_PATH.replace("${S3_BUCKET_NAME}", S3_BUCKET)
+
+S3_PROCESSED_PATH = os.getenv("S3_STREAMING_CANDLES_PATH", os.getenv("S3_PROCESSED_PATH", f"s3a://{S3_BUCKET}/crypto/streaming/candles_1m"))
+if "${S3_BUCKET_NAME}" in S3_PROCESSED_PATH:
+    S3_PROCESSED_PATH = S3_PROCESSED_PATH.replace("${S3_BUCKET_NAME}", S3_BUCKET)
 # Checkpoint Configuration
 # Mặc định sử dụng local checkpoints để đạt tốc độ cao nhất (0ms latency), 
 # không tốn chi phí gọi S3 API định kỳ và tránh lỗi atomic rename trên Windows.
@@ -139,6 +143,7 @@ def process_crypto_streams(spark: SparkSession):
         .filter(
             col("trade_id").isNotNull() &
             col("symbol").isNotNull() &
+            (col("symbol") == "BTC-USDT") &
             col("price").isNotNull() & (col("price") > 0.0) &
             col("size").isNotNull() & (col("size") > 0.0) &
             col("raw_timestamp").isNotNull() & (col("raw_timestamp") > 0) &

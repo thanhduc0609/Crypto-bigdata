@@ -1,6 +1,7 @@
 -- =============================================================================
 -- Fact Table: fact_crypto_1m_candles
--- Description: Bảng Fact lưu trữ nến 1 phút và các chỉ số tài chính tổng hợp (OHLC, VWAP, Imbalance)
+-- Description: Bảng Fact lưu trữ nến 1 phút và các chỉ số định lượng streaming
+--              (OHLCV, VWAP, Order Flow Imbalance, Buy/Sell Volumes)
 -- Database: PostgreSQL 16
 -- =============================================================================
 
@@ -16,16 +17,18 @@ CREATE TABLE IF NOT EXISTS fact_crypto_1m_candles (
     low NUMERIC(18, 8) NOT NULL,
     close NUMERIC(18, 8) NOT NULL,
     volume NUMERIC(24, 8) NOT NULL,
-    trade_count BIGINT NOT NULL,
+    trade_count BIGINT,
     buy_volume NUMERIC(24, 8) DEFAULT 0,
     sell_volume NUMERIC(24, 8) DEFAULT 0,
-    vwap NUMERIC(18, 8) NOT NULL,
+    vwap NUMERIC(18, 8),
     trade_imbalance NUMERIC(10, 4) DEFAULT 0,
-    total_trade_value NUMERIC(24, 4) NOT NULL,
+    total_trade_value NUMERIC(24, 4),
+    source VARCHAR(32) DEFAULT 'realtime_stream',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (symbol, window_start)
 );
 
--- Indexes for Query Optimization
+-- Indexes for Fast Streaming Lookups & Time-series Queries
 CREATE INDEX IF NOT EXISTS idx_fact_1m_symbol_window ON fact_crypto_1m_candles (symbol, window_start DESC);
 CREATE INDEX IF NOT EXISTS idx_fact_1m_window_start ON fact_crypto_1m_candles (window_start DESC);
+CREATE INDEX IF NOT EXISTS idx_fact_1m_symbol_created ON fact_crypto_1m_candles (symbol, created_at DESC);

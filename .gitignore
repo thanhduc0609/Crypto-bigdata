@@ -17,6 +17,12 @@ spark-warehouse/
 # Data
 data/raw/
 data/processed/
+data/exports/
+data/test_isolated_backfill/
+data/backfill_progress_*.json
+data/backfill_summary_*.json
+data/lake/
+ml/artifacts/staging/
 
 # IDE
 .vscode/

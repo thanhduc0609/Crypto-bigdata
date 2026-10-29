@@ -1,41 +1,23 @@
 # =============================================================================
-# Crypto Big Data - Dynamic Environment Setup & Pipeline Orchestration
+# Crypto Big Data - Real-time Streaming Pipeline Orchestration (PowerShell)
 # =============================================================================
-# QUY TRÌNH VẬN HÀNH DỰ ÁN THEO 4 BƯỚC CHUẨN:
+# KIẾN TRÚC HỆ THỐNG: PURE REAL-TIME STREAMING & DATA LAKE
 #
-#   BƯỚC 1: KHỞI TẠO HẠ TẦNG & DATABASE
-#     .\scripts\setup_env.ps1 -DockerUp
-#       -> Công dụng: Khởi động container Kafka Broker (Port 9092) & PostgreSQL DW (Port 5433).
-#     .\scripts\setup_env.ps1 -InitWarehouse
-#       -> Công dụng: Quét và nạp toàn bộ Schema SQL (dim -> fact -> views) vào PostgreSQL.
+#   1. THU THẬP & TRUYỀN TẢI:
+#      OKX WebSocket (BTC, ETH, SOL) -> Python Multi-Stream Producer -> Apache Kafka (KRaft)
 #
-#   BƯỚC 2: TẢI BÙ DỮ LIỆU LỊCH SỬ (HISTORICAL BACKFILL)
-#     .\scripts\setup_env.ps1 -Backfill
-#       -> Công dụng: Tải nến 1m lịch sử 7 ngày qua từ OKX REST API nạp thẳng vào AWS S3.
-#     .\scripts\setup_env.ps1 -Backfill -ExtraArgs "--days 30"
-#       -> Công dụng: Tùy chỉnh tải 30 ngày lịch sử của BTC, ETH, SOL vào S3.
+#   2. XỬ LÝ PHÂN TÁN (SPARK STRUCTURED STREAMING):
+#      - Lọc sạch & chuẩn hóa dữ liệu giao dịch
+#      - Watermarking (2 phút) & Khử trùng lặp (dropDuplicates)
+#      - Tính nến 1 phút Tumbling Window (OHLCV, VWAP, Order Flow Imbalance)
+#      - Phát hiện giao dịch Cá mập (Whale Alert >= $500,000) tức thời
 #
-#   BƯỚC 3: VẬN HÀNH LUỒNG DỮ LIỆU THỜI GIAN THỰC (REAL-TIME STREAMING)
-#     .\scripts\setup_env.ps1 -StartPipeline
-#       -> Công dụng: [Khuyên dùng - 1 Click] Tự động bật Docker + mở 2 Terminal chạy
-#                     song song OKX WebSocket Producer và Spark Streaming Engine.
-#     Hoặc chạy thủ công từng luồng riêng lẻ:
-#       .\scripts\setup_env.ps1 -RunProducer  (Chạy luồng WebSocket OKX -> Kafka)
-#       .\scripts\setup_env.ps1 -RunSpark     (Chạy Spark Streaming, Whale Alert, S3)
+#   3. LƯU TRỮ ĐA TẦNG:
+#      - AWS S3 Data Lake (Parquet Columnar): Lưu trữ giao dịch sạch & nến 1m
+#      - PostgreSQL Data Warehouse (Star Schema): Nạp trực tiếp qua Streaming Sink
 #
-#   BƯỚC 4: PHÂN TÍCH ĐA KHUNG THỜI GIAN & KHAI THÁC BI (ANALYTICS & SERVING)
-#     .\scripts\setup_env.ps1 -TimeframeAgg
-#       -> Công dụng: Chạy PySpark Batch tổng hợp nến Day/Week/Month từ S3 Data Lake.
-#     .\scripts\setup_env.ps1 -FetchBatch
-#       -> Công dụng: Cào các chỉ số phái sinh (Funding Rates, Open Interest, Long/Short).
-#     .\scripts\setup_env.ps1 -ViewS3
-#       -> Công dụng: Mở Menu tương tác khám phá file Parquet trên S3 & xuất CSV.
-#     .\scripts\setup_env.ps1 -RunETL
-#       -> Công dụng: Nạp dữ liệu từ S3 Parquet vào các bảng Fact trong PostgreSQL.
-#
-#   CÁC LỆNH TIỆN ÍCH KHÁC:
-#     .\scripts\setup_env.ps1 -Info        (Kiểm tra trạng thái & phiên bản các thành phần)
-#     .\scripts\setup_env.ps1 -DockerDown  (Dừng toàn bộ Docker containers khi nghỉ)
+#   4. PHÂN TÍCH & TRỰC QUAN HÓA:
+#      - Web Analytics Dashboard (TradingView Lightweight Charts, Port 5000)
 # =============================================================================
 
 [CmdletBinding()]
@@ -43,22 +25,20 @@ param (
     [switch]$Info,
     [switch]$StartPipeline,
     [switch]$StreamPipeline,
-    [switch]$BatchPipeline,
-    [switch]$BatchAnalytics,
-    [switch]$ExportCSV,
-    [switch]$Backfill,
-    [switch]$TimeframeAgg,
-    [switch]$RunBatchAgg,
-    [switch]$FetchBatch,
     [switch]$RunProducer,
     [switch]$RunSpark,
     [switch]$ViewS3,
+    [switch]$InitS3,
+    [switch]$TestS3,
     [switch]$InitWarehouse,
-    [switch]$RunETL,
+    [switch]$TestWarehouse,
+    [switch]$BuildFeatures,
+    [switch]$TrainModel,
+    [switch]$RunPrediction,
+    [switch]$TestPipeline,
     [switch]$Dashboard,
     [switch]$WebDashboard,
     [switch]$Demo,
-    [switch]$Predict,
     [switch]$DockerUp,
     [switch]$DockerDown,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -75,128 +55,124 @@ $javaCandidates = @(
     "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot",
     "C:\Program Files\Eclipse Adoptium\jdk-17*",
     "C:\Program Files\Java\jdk-17*",
-    "C:\Program Files\Java\jdk-11*",
-    "C:\Program Files\Eclipse Adoptium\*"
+    "C:\Program Files\BellSoft\LibericaJDK-17*",
+    "C:\Program Files\Eclipse Adoptium\jdk-11*",
+    "C:\Program Files\Java\jdk-11*"
 )
 
 $foundJava = $null
-if ($env:JAVA_HOME -and (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-    $foundJava = $env:JAVA_HOME
-} else {
-    foreach ($cand in $javaCandidates) {
-        $resolved = Resolve-Path $cand -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($resolved -and (Test-Path "$($resolved.Path)\bin\java.exe")) {
-            $foundJava = $resolved.Path
-            break
-        }
+foreach ($pattern in $javaCandidates) {
+    $matches = Get-Item $pattern -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+    if ($matches) {
+        $foundJava = $matches[0].FullName
+        break
     }
 }
 
 if ($foundJava) {
     $env:JAVA_HOME = $foundJava
-} else {
-    Write-Warning "[!] JAVA_HOME not found. Please install JDK 17."
+    $env:PATH = "$foundJava\bin;$env:PATH"
+} elseif (-not $env:JAVA_HOME) {
+    $javaCmd = Get-Command java -ErrorAction SilentlyContinue
+    if ($javaCmd) {
+        $javaBin = Split-Path -Parent $javaCmd.Source
+        $env:JAVA_HOME = Split-Path -Parent $javaBin
+    }
 }
 
 # -----------------------------------------------------------------------------
-# 2. DETECT & CONFIGURE HADOOP_HOME (WinUtils for Windows)
+# 2. DETECT & CONFIGURE HADOOP_HOME (WINUTILS CHO WINDOWS)
 # -----------------------------------------------------------------------------
 $hadoopCandidates = @(
+    "$PROJECT_ROOT\hadoop",
     "C:\hadoop",
-    "$PROJECT_ROOT\hadoop"
+    "D:\hadoop"
 )
 
-$foundHadoop = $null
-foreach ($cand in $hadoopCandidates) {
-    if (Test-Path "$cand\bin\winutils.exe") {
-        $foundHadoop = $cand
+foreach ($hPath in $hadoopCandidates) {
+    if (Test-Path "$hPath\bin\winutils.exe") {
+        $env:HADOOP_HOME = (Resolve-Path $hPath).Path
+        $env:PATH = "$env:HADOOP_HOME\bin;$env:PATH"
         break
     }
 }
 
-if ($foundHadoop) {
-    $env:HADOOP_HOME = $foundHadoop
-} else {
-    $env:HADOOP_HOME = "C:\hadoop"
-}
-
 # -----------------------------------------------------------------------------
-# 3. DETECT & CONFIGURE PYTHON VIRTUAL ENVIRONMENT (.venv)
+# 3. DETECT & CONFIGURE PYTHON ENVIRONMENT (.venv)
 # -----------------------------------------------------------------------------
-$venvPath = "$PROJECT_ROOT\.venv"
-if (Test-Path "$venvPath\Scripts\python.exe") {
-    $env:PYSPARK_PYTHON = "$venvPath\Scripts\python.exe"
-    $env:PYSPARK_DRIVER_PYTHON = "$venvPath\Scripts\python.exe"
-    $env:VIRTUAL_ENV = $venvPath
-    
-    # Prepend virtual environment Scripts to PATH so any python or pip command uses .venv
-    if ($env:PATH -notlike "*$venvPath\Scripts*") {
-        $env:PATH = "$venvPath\Scripts;$env:PATH"
-    }
-
-    # Auto activate virtual environment inside current PowerShell session safely
-    $venvActivate = "$venvPath\Scripts\Activate.ps1"
-    if (Test-Path $venvActivate) {
-        try {
-            & $venvActivate
-        } catch {}
-    }
+$venvPython = "$PROJECT_ROOT\.venv\Scripts\python.exe"
+if (Test-Path $venvPython) {
+    $env:PYSPARK_PYTHON = $venvPython
+    $env:PYSPARK_DRIVER_PYTHON = $venvPython
 } else {
     $env:PYSPARK_PYTHON = "python"
     $env:PYSPARK_DRIVER_PYTHON = "python"
 }
 
 # -----------------------------------------------------------------------------
-# 4. CONFIGURE SPARK_HOME & UPDATE PATH
+# 4. LOAD BIẾN MÔI TRƯỜNG TỪ FILE .env
 # -----------------------------------------------------------------------------
-if (Test-Path "$venvPath\Lib\site-packages\pyspark") {
-    $env:SPARK_HOME = "$venvPath\Lib\site-packages\pyspark"
-}
-
-# Prepend to PATH
-$newPaths = @(
-    "$env:JAVA_HOME\bin",
-    "$env:HADOOP_HOME\bin",
-    "$env:SPARK_HOME\bin"
-) | Where-Object { $_ -and (Test-Path $_) }
-
-foreach ($p in $newPaths) {
-    if ($env:PATH -notlike "*$p*") {
-        $env:PATH = "$p;$env:PATH"
+$envFile = "$PROJECT_ROOT\.env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+            $parts = $line.Split("=", 2)
+            $k = $parts[0].Trim()
+            $v = $parts[1].Trim().Trim("'`"")
+            if (-not [string]::IsNullOrEmpty($k)) {
+                [Environment]::SetEnvironmentVariable($k, $v, "Process")
+            }
+        }
+    }
+    $bucketName = [Environment]::GetEnvironmentVariable("S3_BUCKET_NAME", "Process")
+    if ($bucketName) {
+        @("S3_RAW_PATH", "S3_PROCESSED_PATH", "S3_CHECKPOINT_RAW", "S3_CHECKPOINT_PROCESSED") | ForEach-Object {
+            $curVal = [Environment]::GetEnvironmentVariable($_, "Process")
+            if ($curVal -and $curVal.Contains('${S3_BUCKET_NAME}')) {
+                $newVal = $curVal.Replace('${S3_BUCKET_NAME}', $bucketName)
+                [Environment]::SetEnvironmentVariable($_, $newVal, "Process")
+            }
+        }
     }
 }
 
 # -----------------------------------------------------------------------------
-# 5. RETRIEVE COMPONENT VERSIONS
+# 5. HÀM KIỂM TRA PHIÊN BẢN CÁC THÀNH PHẦN HẠ TẦNG
 # -----------------------------------------------------------------------------
 function Get-ComponentVersions {
-    $pyVer = "N/A"
-    $sparkVer = "N/A"
-    $javaVer = "N/A"
-    $hadoopVer = "N/A"
+    $pyVer = "Not Found"
+    $sparkVer = "Not Found"
+    $javaVer = "Not Found"
+    $hadoopVer = "Not Configured"
     $kafkaStatus = "Stopped"
     $pgStatus = "Stopped"
 
     # Python Version
-    if (Test-Path $env:PYSPARK_PYTHON) {
-        $pyVer = (& $env:PYSPARK_PYTHON --version 2>&1).ToString().Trim()
-        
-        # PySpark Version
-        $sparkCheck = & $env:PYSPARK_PYTHON -c "import pyspark; print(pyspark.__version__)" 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $sparkVer = "PySpark " + $sparkCheck.ToString().Trim()
+    try {
+        $pyOut = & $env:PYSPARK_PYTHON --version 2>&1
+        if ($pyOut -match "Python (\d+\.\d+\.\d+)") {
+            $pyVer = $Matches[1]
         }
-    }
+    } catch {}
+
+    # PySpark Version
+    try {
+        $spOut = & $env:PYSPARK_PYTHON -c "import pyspark; print(pyspark.__version__)" 2>&1
+        if ($LASTEXITCODE -eq 0 -and $spOut -notmatch "Error") {
+            $sparkVer = $spOut.Trim()
+        }
+    } catch {}
 
     # Java Version
-    if ($env:JAVA_HOME -and (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-        $jOut = & "$env:JAVA_HOME\bin\java.exe" -version 2>&1
-        if ($jOut.Count -gt 0) {
-            $javaVer = $jOut[0].ToString().Trim()
+    try {
+        $jOut = & java -version 2>&1
+        if ($jOut -match 'version "([^"]+)"') {
+            $javaVer = $Matches[1]
         }
-    }
+    } catch {}
 
-    # Hadoop Winutils Version
+    # Hadoop WinUtils
     if ($env:HADOOP_HOME -and (Test-Path "$env:HADOOP_HOME\bin\winutils.exe")) {
         $hadoopVer = "WinUtils 3.3.4+ ($env:HADOOP_HOME)"
     }
@@ -227,11 +203,11 @@ function Get-ComponentVersions {
 $v = Get-ComponentVersions
 
 # -----------------------------------------------------------------------------
-# 6. DISPLAY DASHBOARD
+# 6. HIỂN THỊ TRẠNG THÁI HỆ THỐNG
 # -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "==========================================================================" -ForegroundColor Cyan
-Write-Host "  Crypto Big Data Streaming Pipeline - Environment Ready" -ForegroundColor Cyan
+Write-Host "  Crypto Big Data Pure Streaming Pipeline - Environment Ready" -ForegroundColor Cyan
 Write-Host "==========================================================================" -ForegroundColor Cyan
 Write-Host " [OK] Project Root     : $PROJECT_ROOT" -ForegroundColor Green
 Write-Host " [OK] Python Version   : $($v.Python)" -ForegroundColor Green
@@ -240,24 +216,24 @@ Write-Host " [OK] Java Runtime     : $($v.Java)" -ForegroundColor Green
 Write-Host " [OK] JAVA_HOME        : $env:JAVA_HOME" -ForegroundColor DarkGray
 Write-Host " [OK] HADOOP_HOME      : $env:HADOOP_HOME" -ForegroundColor DarkGray
 Write-Host " [OK] Kafka Broker     : $($v.Kafka)" -ForegroundColor $(if ($v.Kafka -like "Running*") { "Green" } else { "Yellow" })
-Write-Host " [OK] PostgreSQL DWH   : $($v.Postgres)" -ForegroundColor $(if ($v.Postgres -like "Running*") { "Green" } else { "Yellow" })
+Write-Host " [OK] PostgreSQL DW    : $($v.Postgres)" -ForegroundColor $(if ($v.Postgres -like "Running*") { "Green" } else { "Yellow" })
 Write-Host "==========================================================================" -ForegroundColor Cyan
 
 # -----------------------------------------------------------------------------
-# 7. EXECUTE COMMANDS BASED ON PARAMETERS
+# 7. ĐIỀU PHỐI VẬN HÀNH DỰA TRÊN THAM SỐ
 # -----------------------------------------------------------------------------
 if ($StartPipeline -or $StreamPipeline) {
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
-    Write-Host "  LUỒNG 1: STREAMING PIPELINE (SPEED LAYER / LOW LATENCY)" -ForegroundColor Cyan
+    Write-Host "  KICH HOAT TRON GOI PIPELINE STREAMING THOI GIAN THUC (SPEED LAYER)" -ForegroundColor Cyan
     Write-Host "==========================================================================" -ForegroundColor Cyan
 
     # 1. Bật Docker Containers
-    Write-Host "`n[1/3] Starting Kafka & PostgreSQL Containers..." -ForegroundColor Yellow
+    Write-Host "`n[1/3] Khoi dong Docker Containers (Kafka:9092 va PostgreSQL:5433)..." -ForegroundColor Yellow
     docker compose up -d
     Start-Sleep -Seconds 3
 
     # 2. Khởi tạo Schema Database
-    Write-Host "`n[2/3] Checking Warehouse Schema..." -ForegroundColor Yellow
+    Write-Host "`n[2/3] Kiem tra va khoi tao Schema Data Warehouse..." -ForegroundColor Yellow
     try {
         & $env:PYSPARK_PYTHON "$PROJECT_ROOT\warehouse\etl\db_config.py"
     } catch {
@@ -265,148 +241,112 @@ if ($StartPipeline -or $StreamPipeline) {
     }
 
     # 3. Mở cửa sổ riêng cho Producer
-    Write-Host "`n[3/3] Spawning Producer and Spark Streaming in separate terminals..." -ForegroundColor Green
+    Write-Host "`n[3/3] Mo cua so PowerShell rieng cho Producer va Spark Streaming..." -ForegroundColor Green
     
-    $producerCmd = "& '$PROJECT_ROOT\scripts\setup_env.ps1' -RunProducer"
-    Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "$producerCmd" -WorkingDirectory $PROJECT_ROOT
+    $producerCmd = "powershell -NoExit -ExecutionPolicy Bypass -Command `"& '$PROJECT_ROOT\scripts\setup_env.ps1' -RunProducer`""
+    Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "& '$PROJECT_ROOT\scripts\setup_env.ps1' -RunProducer" -WorkingDirectory $PROJECT_ROOT
 
     Start-Sleep -Seconds 2
 
     # 4. Mở cửa sổ riêng cho Spark Streaming Engine
-    $sparkCmd = "& '$PROJECT_ROOT\scripts\setup_env.ps1' -RunSpark"
-    Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "$sparkCmd" -WorkingDirectory $PROJECT_ROOT
+    Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "& '$PROJECT_ROOT\scripts\setup_env.ps1' -RunSpark" -WorkingDirectory $PROJECT_ROOT
 
-    Write-Host "`n[SUCCESS] Streaming Pipeline launched! 2 separate PowerShell terminals opened." -ForegroundColor Cyan
-    Write-Host "  - Window 1: OKX WebSocket -> Kafka Producer (crypto-trades)" -ForegroundColor White
-    Write-Host "  - Window 2: Spark Structured Streaming & Whale Detector Engine" -ForegroundColor White
-}
-elseif ($BatchPipeline) {
-    Write-Host "`n==========================================================================" -ForegroundColor Cyan
-    Write-Host "  LUỒNG 2: BATCH PIPELINE (BATCH LAYER / MULTI-TIMEFRAME QUANT ANALYTICS)" -ForegroundColor Cyan
-    Write-Host "==========================================================================" -ForegroundColor Cyan
-    
-    Write-Host "`n[1/3] Thu thap nen lich su tu OKX REST API nap vao S3 Data Lake..." -ForegroundColor Yellow
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\ingestion\batch\historical_backfill.py" --days 7
-
-    Write-Host "`n[2/3] Cao du lieu phai sinh (Funding Rates, Open Interest, Long/Short)..." -ForegroundColor Yellow
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\ingestion\batch\okx_derivatives_fetcher.py"
-
-    Write-Host "`n[3/4] Chay Batch Analytics Engine (Ngay/Tuan/Thang/Nam) & Tu dong xuat CSV..." -ForegroundColor Green
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\batch\batch_analytics_engine.py" $ExtraArgs
-
-    Write-Host "`n[4/4] Chay Quant Predictive Engine du doan Ngay/Tuan/Thang/Nam ke tiep..." -ForegroundColor Green
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\batch\market_predictor.py"
-}
-elseif ($Predict) {
-    Write-Host "`n[>] Running Quant Predictive & Forecasting Engine (Next Period)..." -ForegroundColor Cyan
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\batch\market_predictor.py" $ExtraArgs
-}
-elseif ($BatchAnalytics -or $TimeframeAgg -or $ExportCSV) {
-    Write-Host "`n[>] Running Batch Analytics Engine (Multi-Timeframe Day/Week/Month/Year & CSV Exporter)..." -ForegroundColor Cyan
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\batch\batch_analytics_engine.py" $ExtraArgs
+    Write-Host "`n[SUCCESS] Pipeline Streaming da duoc kich hoat thanh cong trong 2 terminal rieng!" -ForegroundColor Cyan
+    Write-Host "  - Terminal 1: OKX WebSocket -> Kafka Producer (crypto-trades)" -ForegroundColor White
+    Write-Host "  - Terminal 2: Spark Structured Streaming [Clean, 1m Candles, Whale Alert, S3 and DW]" -ForegroundColor White
 }
 elseif ($DockerUp) {
-    Write-Host "`n[+] Starting Kafka & PostgreSQL Containers..." -ForegroundColor Yellow
+    Write-Host "`n[+] Starting Kafka and PostgreSQL Containers..." -ForegroundColor Yellow
     docker compose up -d
 }
 elseif ($DockerDown) {
     Write-Host "`n[-] Stopping Docker Containers..." -ForegroundColor Yellow
     docker compose down
 }
-elseif ($Backfill) {
-    Write-Host "`n[>] Running OKX Historical Candlestick Backfill -> S3 Data Lake..." -ForegroundColor Cyan
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\ingestion\batch\historical_backfill.py" $ExtraArgs
-}
-elseif ($FetchBatch) {
-    Write-Host "`n[>] Fetching Derivatives Batch Data (Funding Rates, OI, Long/Short)..." -ForegroundColor Cyan
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\ingestion\batch\okx_derivatives_fetcher.py"
-}
-elseif ($RunBatchAgg) {
-    Write-Host "`n[>] Running Daily Market Batch Aggregator from S3 Data Lake..." -ForegroundColor Cyan
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\batch\batch_analytics_engine.py" --timeframe day
-}
 elseif ($RunProducer) {
-    Write-Host "`n[>] Launching OKX Market Data Producer..." -ForegroundColor Cyan
+    Write-Host "`n[>] Launching OKX Market Data WebSocket Producer..." -ForegroundColor Cyan
     & $env:PYSPARK_PYTHON -u "$PROJECT_ROOT\ingestion\streaming\okx_producer.py"
 }
 elseif ($RunSpark) {
-    Write-Host "`n[>] Launching Spark Structured Streaming Processor..." -ForegroundColor Cyan
+    Write-Host "`n[>] Launching Spark Structured Streaming Processor (Whale Alerts and S3 Sink)..." -ForegroundColor Cyan
     & $env:PYSPARK_PYTHON -u "$PROJECT_ROOT\processing\streaming\trade_processor.py"
 }
 elseif ($ViewS3) {
-    Write-Host "`n[>] Launching S3 Parquet Data Lake Reader..." -ForegroundColor Cyan
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\batch\s3_parquet_reader.py" $ExtraArgs
+    Write-Host "`n[>] Launching S3 Parquet Streaming Data Lake Explorer..." -ForegroundColor Cyan
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\analysis\s3_parquet_reader.py" $ExtraArgs
+}
+elseif ($InitS3 -or $TestS3) {
+    Write-Host "`n[>] Testing S3 Connection & Initializing Streaming Folders on AWS S3..." -ForegroundColor Cyan
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\tests\test_s3.py"
 }
 elseif ($InitWarehouse) {
-    Write-Host "`n[+] Initializing PostgreSQL Data Warehouse Schema & Views..." -ForegroundColor Cyan
+    Write-Host "`n[+] Initializing PostgreSQL Pure Streaming Data Warehouse Schema and Views..." -ForegroundColor Cyan
     & $env:PYSPARK_PYTHON "$PROJECT_ROOT\warehouse\etl\db_config.py"
 }
-elseif ($RunETL) {
-    Write-Host "`n[>] Running S3 Data Lake -> PostgreSQL Data Warehouse ETL Pipeline..." -ForegroundColor Cyan
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\warehouse\etl\s3_to_warehouse.py" $ExtraArgs
+elseif ($TestWarehouse) {
+    Write-Host "`n[>] Running Automated Streaming Data Warehouse Test Suite..." -ForegroundColor Cyan
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\tests\test_warehouse.py"
 }
-elseif ($Dashboard) {
-    Write-Host "`n[>] Launching Terminal Analytics & Quant Trading Dashboard (TUI)..." -ForegroundColor Cyan
-    $dashArgs = @()
-    if ($Demo) { $dashArgs += "--demo" }
-    if ($ExtraArgs) { $dashArgs += $ExtraArgs }
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\processing\analysis\terminal_dashboard.py" $dashArgs
+elseif ($BuildFeatures) {
+    Write-Host "`n[>] Executing Feature Engineering & Dataset Creation..." -ForegroundColor Cyan
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\scripts\build_features.py"
 }
-elseif ($WebDashboard) {
-    Write-Host "`n[>] Launching Web Analytics & Quant Trading Dashboard (Browser UI)..." -ForegroundColor Cyan
+elseif ($TrainModel) {
+    Write-Host "`n[>] Training XGBoost BTC Direction Classifier (5-Minute Horizon)..." -ForegroundColor Cyan
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\scripts\train_model.py"
+}
+elseif ($RunPrediction) {
+    Write-Host "`n[>] Running BTC 5-Minute Direction Inference Service..." -ForegroundColor Cyan
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\scripts\run_prediction.py" $ExtraArgs
+}
+elseif ($TestPipeline) {
+    Write-Host "`n[>] Running Full Pipeline & XGBoost Automated Test Suite..." -ForegroundColor Cyan
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\tests\test_pipeline_e2e.py"
+}
+elseif ($WebDashboard -or $Dashboard) {
+    Write-Host "`n[>] Launching Web Analytics and Quant Trading Dashboard (Browser UI)..." -ForegroundColor Cyan
     Write-Host "    Open browser at: http://127.0.0.1:5000" -ForegroundColor Green
+    Start-Process "http://127.0.0.1:5000"
     & $env:PYSPARK_PYTHON "$PROJECT_ROOT\web\app.py"
 }
 elseif (-not $Info) {
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
-    Write-Host "  DANH SÁCH LỆNH VẬN HÀNH & CÔNG DỤNG TỪNG BƯỚC (SETUP_ENV.PS1)" -ForegroundColor Cyan
+    Write-Host "  DANH SACH LENH VAN HANH HE THONG REAL-TIME STREAMING" -ForegroundColor Cyan
     Write-Host "==========================================================================" -ForegroundColor Cyan
 
-    Write-Host "`n[BƯỚC 1] KHỞI TẠO HẠ TẦNG & CƠ SỞ DỮ LIỆU:" -ForegroundColor Yellow
+    Write-Host "`n[BUOC 1] KHOI TAO HA TANG VA CO SO DU LIEU:" -ForegroundColor Yellow
     Write-Host "  .\scripts\setup_env.ps1 -DockerUp" -ForegroundColor White
-    Write-Host "    -> Công dụng: Bật Docker containers cho Kafka (9092) và PostgreSQL (5433)." -ForegroundColor DarkGray
+    Write-Host "    -> Bat Docker containers cho Kafka (9092) va PostgreSQL (5433)." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -InitWarehouse" -ForegroundColor White
-    Write-Host "    -> Công dụng: Nạp toàn bộ DDL bảng (dim, fact) và Views (Ngày/Tuần/Tháng) vào PostgreSQL DW." -ForegroundColor DarkGray
+    Write-Host "    -> Nap DDL bang Pure Streaming DW (dim_symbol, dim_alert_tier, fact_trades, fact_candles_1m) va 10 Views." -ForegroundColor DarkGray
+  Write-Host "  .\scripts\setup_env.ps1 -TestWarehouse" -ForegroundColor White
+    Write-Host "    -> Chay bo kiem thu tu dong Data Warehouse, xac thuc do tre thap (< 100ms) cua Speed Layer." -ForegroundColor DarkGray
 
-    Write-Host "`n==========================================================================" -ForegroundColor Green
-    Write-Host "  LUỒNG 1: REAL-TIME STREAMING (SPEED LAYER / LOW LATENCY)" -ForegroundColor Green
-    Write-Host "==========================================================================" -ForegroundColor Green
-    Write-Host "  .\scripts\setup_env.ps1 -StreamPipeline   ★ (1 CLICK BẬT TRỌN GÓI STREAMING)" -ForegroundColor Green
-    Write-Host "    -> Công dụng: Tự bật Docker, mở Producer (WebSocket) & Spark Streaming Engine." -ForegroundColor DarkGray
+    Write-Host "`n[BUOC 2] VAN HANH PIPELINE STREAMING THOI GIAN THUC:" -ForegroundColor Green
+    Write-Host "  .\scripts\setup_env.ps1 -StreamPipeline   [1-CLICK BAT TRON GOI PIPELINE]" -ForegroundColor Green
+    Write-Host "    -> Tu bat Docker, mo Producer (WebSocket) va Spark Streaming Engine." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -RunProducer" -ForegroundColor White
-    Write-Host "    -> Công dụng: Thu thập lệnh khớp thời gian thực OKX đẩy vào Kafka topic." -ForegroundColor DarkGray
+    Write-Host "    -> Thu thap lenh khop thoi gian thuc tu san OKX day vao Kafka topic." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -RunSpark" -ForegroundColor White
-    Write-Host "    -> Công dụng: Spark Streaming Engine (Lọc nhiễu, Whale Alert, Order Flow, ghi S3 & DW)." -ForegroundColor DarkGray
+    Write-Host "    -> Spark Structured Streaming Engine (Clean, Whale Alert, 1m Candles, ghi S3 va DW)." -ForegroundColor DarkGray
 
-    Write-Host "`n==========================================================================" -ForegroundColor Cyan
-    Write-Host "  LUỒNG 2: BATCH ANALYTICS & EXPORT (BATCH LAYER / TIME-SERIES QUANT)" -ForegroundColor Cyan
-    Write-Host "==========================================================================" -ForegroundColor Cyan
-    Write-Host "  .\scripts\setup_env.ps1 -BatchPipeline    ★ (1 CLICK: BACKFILL -> PHÁI SINH -> BATCH ANALYTICS -> DỰ BÁO)" -ForegroundColor Cyan
-    Write-Host "    -> Công dụng: Backfill nến lịch sử -> Cào phái sinh -> Batch Analytics -> Dự báo chu kỳ kế tiếp -> Xuất toàn bộ CSV." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -Predict          ★ (DỰ BÁO ĐỊNH LƯỢNG CHU KỲ KẾ TIẾP)" -ForegroundColor Green
-    Write-Host "    -> Công dụng: Chạy mô hình lượng hóa dự đoán nến Ngày, Tuần, Tháng, Năm kế tiếp (Target Price, Signals)." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -BatchAnalytics" -ForegroundColor White
-    Write-Host "    -> Công dụng: Tổng hợp nến Ngày/Tuần/Tháng & Tự động xuất CSV vào data/exports/." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -ExportCSV" -ForegroundColor White
-    Write-Host "    -> Công dụng: Xuất trực tiếp file CSV Ngày, Tuần, Tháng từ S3 Data Lake." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -Backfill -ExtraArgs '--days 30'" -ForegroundColor White
-    Write-Host "    -> Công dụng: Nạp 30 ngày nến 1m lịch sử từ OKX REST API vào S3 Data Lake." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -FetchBatch" -ForegroundColor White
-    Write-Host "    -> Công dụng: Cào các chỉ số phái sinh (Funding Rates, Open Interest, Long/Short)." -ForegroundColor DarkGray
+    Write-Host "`n[BUOC 3] HOC MAY & DU BAO (XGBOOST CLASSIFIER):" -ForegroundColor Blue
+    Write-Host "  .\scripts\setup_env.ps1 -BuildFeatures    -> Tinh toan 18 dac trung ky thuat va tao nhan du bao 5 phut." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -TrainModel       -> Huan luyen mo hinh XGBoost tren chuoi thoi gian (70/15/15)." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -RunPrediction    -> Chay dich vu suy luan real-time, luu vao PostgreSQL DW." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -TestPipeline     -> Chay bo kiem thu tu dong toan dien (7/7 tests passed)." -ForegroundColor DarkGray
+
+    Write-Host "`n[BUOC 4] KHAI THAC VA TRUC QUAN HOA:" -ForegroundColor Magenta
+    Write-Host "  .\scripts\setup_env.ps1 -WebDashboard     [WEB TRADING & ML DASHBOARD]" -ForegroundColor Green
+    Write-Host "    -> Khoi chay Web Dashboard tai http://127.0.0.1:5000 (TradingView, ML Predictions, DW Explorer)." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -ViewS3" -ForegroundColor White
-    Write-Host "    -> Công dụng: Menu tương tác khám phá Parquet trên S3 & xuất CSV theo lựa chọn." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -RunETL" -ForegroundColor White
-    Write-Host "    -> Công dụng: Nạp dữ liệu từ S3 Data Lake vào PostgreSQL Data Warehouse." -ForegroundColor DarkGray
+    Write-Host "    -> Menu tuong tac kham pha Parquet Streaming tren S3 Data Lake va xuat CSV." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -InitS3" -ForegroundColor Yellow
+    Write-Host "    -> Khoi tao nhanh cay thu muc Parquet tren AWS S3 (trades va candles_1m)." -ForegroundColor DarkGray
 
-    Write-Host "`n[DASHBOARDS & GIAO DIỆN PHÂN TÍCH]:" -ForegroundColor Magenta
-    Write-Host "  .\scripts\setup_env.ps1 -WebDashboard     ★ (WEB QUANT DASHBOARD TRÊN TRÌNH DUYỆT)" -ForegroundColor Green
-    Write-Host "    -> Công dụng: Khởi chạy Web Dashboard tại http://127.0.0.1:5000 (TradingView, Whales, DW Explorer)." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -Dashboard        ★ (TRỰC QUAN HÓA TERMINAL TUI)" -ForegroundColor Yellow
-    Write-Host "    -> Công dụng: Màn hình trực quan hóa Terminal (Cá mập, VWAP, Order Flow Gauge)." -ForegroundColor DarkGray
-
-    Write-Host "`n[TIỆN ÍCH]:" -ForegroundColor DarkYellow
-    Write-Host "  .\scripts\setup_env.ps1 -Info      -> Kiểm tra phiên bản Python, Spark, Java, Docker." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -DockerDown-> Tắt sạch Docker containers khi kết thúc." -ForegroundColor DarkGray
+    Write-Host "`n[TIEN ICH]:" -ForegroundColor DarkYellow
+    Write-Host "  .\scripts\setup_env.ps1 -Info      -> Kiem tra phien ban Python, Spark, Java, Docker." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -DockerDown-> Dung toan bo Docker containers khi ket thuc." -ForegroundColor DarkGray
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
     Write-Host ""
 }

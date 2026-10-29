@@ -1,0 +1,22 @@
+{
+  "feature_names": [
+    "log_return",
+    "price_momentum_5m",
+    "high_low_range",
+    "volume_change",
+    "sma_5",
+    "sma_15",
+    "ema_12",
+    "ema_26",
+    "macd",
+    "macd_signal",
+    "bb_upper",
+    "bb_lower",
+    "bb_bandwidth",
+    "rsi_14",
+    "rolling_volatility_15m"
+  ],
+  "feature_count": 15,
+  "target": "target_direction",
+  "prediction_horizon_minutes": 5
+}

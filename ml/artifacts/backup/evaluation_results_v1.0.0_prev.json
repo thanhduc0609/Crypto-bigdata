@@ -1,0 +1,114 @@
+{
+  "metrics": {
+    "accuracy": 0.7188,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1_score": 0.0,
+    "balanced_accuracy": 0.5,
+    "roc_auc": 0.5
+  },
+  "confusion_matrix": [
+    [
+      23,
+      0
+    ],
+    [
+      9,
+      0
+    ]
+  ],
+  "feature_importance": [
+    {
+      "feature": "bb_bandwidth",
+      "importance": 0.1058
+    },
+    {
+      "feature": "ema_26",
+      "importance": 0.1019
+    },
+    {
+      "feature": "macd_signal",
+      "importance": 0.091
+    },
+    {
+      "feature": "sma_5",
+      "importance": 0.0865
+    },
+    {
+      "feature": "rsi_14",
+      "importance": 0.0853
+    },
+    {
+      "feature": "bb_lower",
+      "importance": 0.0758
+    },
+    {
+      "feature": "sma_15",
+      "importance": 0.0712
+    },
+    {
+      "feature": "rolling_volatility_15m",
+      "importance": 0.0552
+    },
+    {
+      "feature": "ema_12",
+      "importance": 0.0535
+    },
+    {
+      "feature": "bb_upper",
+      "importance": 0.049
+    },
+    {
+      "feature": "macd",
+      "importance": 0.0478
+    },
+    {
+      "feature": "price_momentum_5m",
+      "importance": 0.0464
+    },
+    {
+      "feature": "log_return",
+      "importance": 0.0358
+    },
+    {
+      "feature": "high_low_range",
+      "importance": 0.0346
+    },
+    {
+      "feature": "volume_change",
+      "importance": 0.034
+    },
+    {
+      "feature": "vwap_deviation",
+      "importance": 0.026
+    },
+    {
+      "feature": "buy_sell_ratio",
+      "importance": 0.0
+    },
+    {
+      "feature": "trade_imbalance",
+      "importance": 0.0
+    }
+  ],
+  "baseline_comparison": {
+    "baseline": {
+      "strategy": "Majority Class Predictor",
+      "majority_class": 0,
+      "class_label": "NOT_UP",
+      "accuracy": 0.7188,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "outperforms_baseline": false,
+    "accuracy_lift_pct": -0.01
+  },
+  "sample_counts": {
+    "test_samples": 32,
+    "actual_up": 9,
+    "actual_not_up": 23,
+    "predicted_up": 0,
+    "predicted_not_up": 32
+  }
+}
