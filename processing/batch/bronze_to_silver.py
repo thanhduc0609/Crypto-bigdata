@@ -132,16 +132,30 @@ def process_bronze_to_silver(
     if rejected_count > 0:
         print(f"[WARN] Detected and isolated {rejected_count} invalid records from Bronze (excluded from Silver).")
 
-    # 3. Standardization & Deduplication
+    from pyspark.sql.window import Window
+    from pyspark.sql.functions import row_number
+
+    valid_before_dedup = valid_df.count()
+
+    # 3. Standardization & Deterministic Deduplication on trade_id
+    # If conflicting records exist with same trade_id, preserve latest raw_timestamp / highest kafka_offset
+    sort_cols = [col("raw_timestamp").desc()]
+    if "kafka_offset" in valid_df.columns:
+        sort_cols.append(col("kafka_offset").desc_nulls_last())
+    dedup_window = Window.partitionBy("trade_id").orderBy(*sort_cols)
+
     cleaned_df = (
         valid_df
         .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))
         .withColumn("trade_value", col("price") * col("size"))
         .withColumn("trade_date", date_format(col("trade_time"), "yyyy-MM-dd"))
-        .dropDuplicates(["trade_id"])
+        .withColumn("_row_num", row_number().over(dedup_window))
+        .filter(col("_row_num") == 1)
+        .drop("_row_num")
     )
 
     valid_count = cleaned_df.count()
+    duplicates_count = valid_before_dedup - valid_count
 
     # 3. Write to Silver Parquet with Dynamic Partition Overwrite (idempotent; only touched partitions replaced)
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
@@ -160,7 +174,9 @@ def process_bronze_to_silver(
 
     return {
         "total": total_records,
+        "valid_before_dedup": valid_before_dedup,
         "valid": valid_count,
+        "duplicates": duplicates_count,
         "rejected": rejected_count,
         "status": "success"
     }
