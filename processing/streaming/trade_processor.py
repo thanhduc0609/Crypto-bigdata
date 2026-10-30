@@ -47,6 +47,7 @@ from storage.s3 import (
     get_s3_bucket,
     get_bronze_trades_path,
     get_gold_candles_path,
+    get_speed_candles_path,
     get_checkpoint_path
 )
 from warehouse.etl.streaming_sink import write_whales_batch, write_candles_batch
@@ -64,7 +65,7 @@ S3_BUCKET = get_s3_bucket()
 STORAGE_DESTINATION = get_storage_mode()
 
 S3_RAW_PATH = get_bronze_trades_path(TARGET_SYMBOL)
-S3_PROCESSED_PATH = get_gold_candles_path(TARGET_SYMBOL)
+S3_SPEED_PATH = get_speed_candles_path(TARGET_SYMBOL)
 
 # Checkpoint Configuration (defaults to local for zero latency on Windows)
 USE_S3_CHECKPOINTS = os.getenv("USE_S3_CHECKPOINTS", "false").lower() in ("true", "1")
@@ -230,7 +231,7 @@ def process_crypto_streams(spark: SparkSession):
             col("trade_imbalance"),
             col("total_trade_value"),
             lit("realtime_stream").alias("source"),
-            lit(True).alias("is_closed")
+            when(col("window.end") <= expr("current_timestamp()"), lit(True)).otherwise(lit(False)).alias("is_closed")
         )
     )
 
@@ -286,12 +287,12 @@ def process_crypto_streams(spark: SparkSession):
         )
         queries.append(raw_s3_query)
 
-        print(f"[OUTPUT] Writing Processed 1m Aggregations -> Lakehouse: {S3_PROCESSED_PATH}")
+        print(f"[OUTPUT] Writing Auxiliary Speed Layer 1m Stream -> Lakehouse: {S3_SPEED_PATH}")
         processed_s3_query = (
             agg_1m_stream.writeStream
             .format("parquet")
             .outputMode("append")
-            .option("path", S3_PROCESSED_PATH)
+            .option("path", S3_SPEED_PATH)
             .option("checkpointLocation", CHECKPOINT_PROCESSED)
             .partitionBy("symbol")
             .trigger(processingTime=TRIGGER_INTERVAL)

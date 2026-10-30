@@ -31,6 +31,7 @@ from processing.core.config import get_ml_config
 from processing.features.feature_engineering import compute_features, FEATURE_COLUMNS
 from ml.dataset import fetch_historical_btc_candles
 from warehouse.etl.db_config import get_db_connection
+from ingestion.historical.candle_parser import parse_okx_rest_candle
 
 ml_cfg = get_ml_config()
 artifacts_cfg = ml_cfg.get("artifacts", {})
@@ -41,6 +42,7 @@ METADATA_FILE = ARTIFACTS_DIR / artifacts_cfg.get("model_metadata_filename", "mo
 
 HORIZON_MINUTES = int(ml_cfg.get("prediction", {}).get("horizon_minutes", 5))
 MODEL_NAME = str(ml_cfg.get("ml", {}).get("model_name", "btc_xgboost_direction"))
+MAX_STALENESS_MINUTES = int(ml_cfg.get("prediction", {}).get("max_staleness_minutes", 10))
 
 
 def get_current_model_version() -> str:
@@ -86,34 +88,38 @@ def load_prediction_model():
 
 def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
     """
-    Fetches the most up-to-date 1m BTC candles for live inference:
-      1. First checks PostgreSQL DW for recent streaming candles (<= 5 mins old).
-      2. If DB candles are stale (> 5 mins old) or insufficient, fetches latest 100 
-         1-minute candles directly from OKX REST API, syncs them to DW, and uses them.
-      3. Falls back to historical Gold Lakehouse if API is unavailable.
+    Fetches the most up-to-date finalized 1m BTC candles for live inference:
+      1. First checks PostgreSQL DW for recent finalized candles (is_closed = TRUE, within staleness threshold).
+      2. If DB candles are stale or insufficient, fetches recent 1m candles directly from OKX REST API,
+         parses them using shared candle_parser (strictly confirm == '1', USDT turnover from row[7]),
+         syncs them to DW, and uses only finalized candles.
+      3. If no live finalized candles are available, returns empty DataFrame to prevent emitting
+         spurious real-time predictions on stale or unclosed data.
     """
     now_utc = datetime.now(timezone.utc)
 
-    # 1. Try PostgreSQL DW for real-time streaming candles
+    # 1. Try PostgreSQL DW for real-time finalized candles
     try:
         conn = get_db_connection()
         try:
             query = """
                 SELECT 
                     window_start, window_end, open, high, low, close, volume, 
-                    buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source
+                    buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed
                 FROM warehouse.fact_crypto_1m_candles
                 WHERE symbol = 'BTC-USDT'
+                  AND is_closed = TRUE
+                  AND open > 0 AND high > 0 AND low > 0 AND close > 0 AND volume >= 0
                 ORDER BY window_start DESC
                 LIMIT 120
             """
             df_db = pd.read_sql(query, conn)
             if not df_db.empty and len(df_db) >= min_candles:
-                latest_ts = pd.to_datetime(df_db["window_start"].iloc[0])
-                if latest_ts.tzinfo is None:
-                    latest_ts = latest_ts.replace(tzinfo=timezone.utc)
-                # Check freshness: candle must be within last 5 minutes
-                if (now_utc - latest_ts) <= timedelta(minutes=5):
+                df_db["window_start"] = pd.to_datetime(df_db["window_start"], utc=True)
+                df_db["window_end"] = pd.to_datetime(df_db["window_end"], utc=True)
+                latest_ts = df_db["window_start"].iloc[0]
+                # Check freshness
+                if (now_utc - latest_ts) <= timedelta(minutes=MAX_STALENESS_MINUTES):
                     df_sorted = df_db.sort_values("window_start").reset_index(drop=True)
                     return df_sorted
         finally:
@@ -130,73 +136,51 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
 
         if data and len(data) >= 26:
             records = []
-            conn = None
-            try:
-                conn = get_db_connection()
-                cur = conn.cursor()
-            except Exception:
-                cur = None
-
             for row in data:
-                # OKX candle schema: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
-                confirm = str(row[8]) if len(row) > 8 else "1"
-                is_closed = bool(confirm != "0")
+                candle_dict = parse_okx_rest_candle(row, symbol="BTC-USDT")
+                # Strictly require valid, closed (confirm == "1") candles
+                if candle_dict is not None and candle_dict.get("is_closed") is True:
+                    records.append(candle_dict)
 
-                ts_ms = int(row[0])
-                dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-                dt_end = dt + timedelta(minutes=1)
-                o, h, l, c, v = float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])
-                vol_ccy = float(row[6]) if len(row) > 6 else 0.0
-
-                records.append({
-                    "window_start": dt,
-                    "window_end": dt_end,
-                    "open": o,
-                    "high": h,
-                    "low": l,
-                    "close": c,
-                    "volume": v,
-                    "total_trade_value": vol_ccy,
-                    "source": "okx_live_sync",
-                    "is_closed": is_closed
-                })
-
-                if cur:
-                    try:
-                        cur.execute("""
-                            INSERT INTO warehouse.fact_crypto_1m_candles (
-                                symbol, window_start, window_end, open, high, low, close, volume, total_trade_value, source, is_closed
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (symbol, window_start) DO UPDATE SET
-                                close = EXCLUDED.close,
-                                high = EXCLUDED.high,
-                                low = EXCLUDED.low,
-                                volume = EXCLUDED.volume,
-                                total_trade_value = EXCLUDED.total_trade_value,
-                                is_closed = EXCLUDED.is_closed;
-                        """, ("BTC-USDT", dt, dt_end, o, h, l, c, v, vol_ccy, "okx_live_sync", is_closed))
-                    except Exception:
-                        pass
-
-            if conn:
+            if records:
+                # Sync to PostgreSQL DW if connection available
                 try:
+                    conn = get_db_connection()
+                    cur = conn.cursor()
+                    insert_sql = """
+                        INSERT INTO warehouse.fact_crypto_1m_candles (
+                            symbol, window_start, window_end, open, high, low, close, volume, total_trade_value, source, is_closed
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (symbol, window_start) DO UPDATE SET
+                            close = EXCLUDED.close,
+                            high = EXCLUDED.high,
+                            low = EXCLUDED.low,
+                            volume = EXCLUDED.volume,
+                            total_trade_value = EXCLUDED.total_trade_value,
+                            is_closed = EXCLUDED.is_closed;
+                    """
+                    for r in records:
+                        cur.execute(insert_sql, (
+                            r["symbol"], r["window_start"], r["window_end"],
+                            r["open"], r["high"], r["low"], r["close"],
+                            r["volume"], r["total_trade_value"],
+                            r["source"], r["is_closed"]
+                        ))
                     conn.commit()
                     cur.close()
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as db_err:
+                    print(f"[PREDICT] Note syncing REST candles to DB: {db_err}")
 
-            df_live = pd.DataFrame(records).sort_values("window_start").reset_index(drop=True)
-            # Filter strictly for closed finalized candles for feature calculation
-            df_finalized = df_live[df_live["is_closed"] == True].copy().reset_index(drop=True)
-            print(f"[PREDICT] Synced {len(df_live)} candles from OKX ({len(df_finalized)} finalized/closed).")
-            return df_finalized if not df_finalized.empty else df_live
+                df_finalized = pd.DataFrame(records).sort_values("window_start").reset_index(drop=True)
+                print(f"[PREDICT] Synced {len(df_finalized)} finalized/closed candles from OKX REST.")
+                return df_finalized
     except Exception as e:
         print(f"[PREDICT] Note: Live OKX REST fetch error ({e}).")
 
-    # 3. Fallback to historical candles in Lakehouse / DB
-    return fetch_historical_btc_candles(min_candles=min_candles)
+    # Do NOT fallback to stale historical training data for real-time inference
+    return pd.DataFrame()
 
 
 def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional[Dict[str, Any]]:
@@ -209,45 +193,65 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
     if candles_df is None:
         candles_df = fetch_live_or_recent_candles(min_candles=40)
 
-    # Ensure window_end is present and filter for finalized candles only (discard active unclosed minute)
-    now_utc = datetime.now(timezone.utc)
+    # Check for empty data before accessing columns
+    if candles_df is None or candles_df.empty:
+        print("[PREDICT] No valid finalized candles available for inference. Skipping prediction.")
+        return None
+
     time_col = "window_start" if "window_start" in candles_df.columns else "timestamp"
+    if time_col not in candles_df.columns:
+        print(f"[PREDICT] Missing timestamp column '{time_col}'. Skipping prediction.")
+        return None
+
     candles_df = candles_df.copy()
-    candles_df[time_col] = pd.to_datetime(candles_df[time_col])
+    candles_df[time_col] = pd.to_datetime(candles_df[time_col], utc=True)
 
     if "window_end" not in candles_df.columns:
         candles_df["window_end"] = candles_df[time_col] + pd.Timedelta(minutes=1)
-    candles_df["window_end"] = pd.to_datetime(candles_df["window_end"])
+    candles_df["window_end"] = pd.to_datetime(candles_df["window_end"], utc=True)
 
-    # Strict finalized filter: candle must have fully closed
-    finalized_mask = candles_df["window_end"] <= (now_utc + timedelta(seconds=5))
-    if finalized_mask.any():
-        candles_df = candles_df[finalized_mask].copy()
-    else:
-        print("[PREDICT] No finalized candles available yet. Waiting for current minute to close.")
+    # Eliminate duplicate timestamps and sort chronologically
+    candles_df = candles_df.drop_duplicates(subset=[time_col]).sort_values(time_col).reset_index(drop=True)
+
+    # Filter strictly for finalized candles (candle must have fully ended: window_end <= now_utc)
+    # NO future tolerance (+5s removed)
+    now_utc = datetime.now(timezone.utc)
+    finalized_mask = (candles_df["window_end"] <= now_utc)
+    if "is_closed" in candles_df.columns:
+        finalized_mask = finalized_mask & (candles_df["is_closed"] == True)
+
+    candles_df = candles_df[finalized_mask].copy().reset_index(drop=True)
+    if candles_df.empty:
+        print("[PREDICT] No finalized closed candles available yet (waiting for current minute to close).")
         return None
 
-    # Sort chronologically
-    candles_df = candles_df.sort_values(time_col).reset_index(drop=True)
+    # Check staleness: latest closed candle must not be older than MAX_STALENESS_MINUTES
+    latest_candle_time = candles_df[time_col].iloc[-1]
+    if (now_utc - latest_candle_time) > timedelta(minutes=MAX_STALENESS_MINUTES):
+        print(f"[PREDICT] Data is stale: latest candle is at {latest_candle_time} UTC (> {MAX_STALENESS_MINUTES}m old). Skipping prediction.")
+        return None
 
-    # Check minimum warmup rows
+    # Check minimum warmup buffer
     if len(candles_df) < 26:
-        print(f"[PREDICT] Insufficient warmup buffer: {len(candles_df)} candles (need at least 26).")
+        print(f"[PREDICT] Insufficient warmup buffer: {len(candles_df)} candles (need at least 26 consecutive minutes).")
+        return None
+
+    # Check for timestamp gaps in the recent evaluation sequence (last 20 candles)
+    recent_eval_df = candles_df.iloc[-20:].copy()
+    time_deltas = recent_eval_df[time_col].diff().dt.total_seconds().dropna() / 60.0
+    if (time_deltas > 1.05).any():
+        print("[PREDICT] Timestamp gap detected in recent candles. Consecutive 1m sequence required for indicators. Skipping prediction.")
         return None
 
     # Compute rolling common features
     feat_df = compute_features(candles_df, feature_mode="common")
-    if len(feat_df) < 20:
-        print("[PREDICT] Incomplete data: not enough historical candles to compute features.")
+    if feat_df.empty or len(feat_df) < 20:
+        print("[PREDICT] Incomplete feature data: not enough historical candles to compute rolling features.")
         return None
 
     # Latest observation
     latest_row = feat_df.iloc[-1]
-    feature_ts = pd.to_datetime(latest_row[time_col])
-    if feature_ts.tzinfo is None:
-        feature_ts = feature_ts.replace(tzinfo=timezone.utc)
-
-    now_ts = datetime.now(timezone.utc)
+    feature_ts = pd.to_datetime(latest_row[time_col], utc=True)
     target_ts = feature_ts + timedelta(minutes=HORIZON_MINUTES)
     current_price = float(latest_row["close"])
 
@@ -265,7 +269,7 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
     result = {
         "symbol": "BTC-USDT",
         "feature_timestamp": feature_ts,
-        "prediction_timestamp": now_ts,
+        "prediction_timestamp": now_utc,
         "target_timestamp": target_ts,
         "predicted_direction": pred_dir,
         "direction_label": "UP" if pred_dir == 1 else "NOT_UP",

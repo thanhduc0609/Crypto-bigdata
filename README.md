@@ -446,11 +446,13 @@ Hệ thống tích hợp một mô hình học máy duy nhất: **XGBoost Classi
   * Phân chia thời gian tuần tự (Chronological split): **70% Train**, **15% Validation**, **15% Test**.
   * Tuyệt đối không xáo trộn ngẫu nhiên (No random shuffle).
   * Vùng đệm cách ly (Embargo buffer) **5 phút** giữa các tập để loại trừ rò rỉ thông tin tương lai (Data Leakage).
-* **Bộ 15 đặc trưng chuẩn hóa (Canonical Feature Vector)**:
-  * Giá & Đà tăng trưởng: `log_return`, `price_momentum_5m`, `high_low_range`
-  * Khối lượng & Dòng tiền: `volume_change`, `buy_sell_ratio`, `trade_imbalance`, `vwap_deviation`
-  * Chỉ báo kỹ thuật xu hướng: `sma_5`, `sma_15`, `ema_12`, `ema_26`, `macd`, `macd_signal`, `rsi_14`, `rolling_volatility_15m`
+* **Bộ 15 đặc trưng chuẩn hóa mặc định (Canonical Common Feature Vector)**:
+  * Giá & Đà tăng trưởng (3): `log_return`, `price_momentum_5m`, `high_low_range`
+  * Khối lượng (1): `volume_change`
+  * Chỉ báo kỹ thuật xu hướng & Biến động (11): `sma_5`, `sma_15`, `ema_12`, `ema_26`, `macd`, `macd_signal`, `bb_upper`, `bb_lower`, `bb_bandwidth`, `rsi_14`, `rolling_volatility_15m`
   *(Được đồng bộ chính xác 100% giữa configs/ml.yaml, ml/artifacts/feature_schema.json và code suy luận).*
+* **Bộ 3 đặc trưng vi mô mở rộng (Extended Microstructure Features - Tách biệt, không nằm trong bộ mặc định)**:
+  * `buy_sell_ratio`, `trade_imbalance`, `vwap_deviation` (Chỉ khả dụng khi có dữ liệu order-flow thực; không tạo dữ liệu giả cho lịch sử).
 
 #### Các lệnh vận hành tầng Machine Learning:
 

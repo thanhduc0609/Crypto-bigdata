@@ -42,6 +42,7 @@ from storage.s3 import (
     get_gold_candles_path
 )
 from warehouse.etl.streaming_sink import write_historical_candles_batch
+from ingestion.historical.candle_parser import parse_okx_rest_candle
 
 load_env_vars()
 
@@ -274,69 +275,25 @@ class OKXHistoricalBackfill:
 
                     batch_min_ts = float("inf")
                     for item in raw_batch:
-                        ts_ms = int(item[0])
-                        batch_min_ts = min(batch_min_ts, ts_ms)
-
-                        # 1. Reject incomplete candles (confirm == "0")
-                        confirm = str(item[8]) if len(item) > 8 else "1"
-                        if confirm == "0":
+                        candle_dict = parse_okx_rest_candle(item, symbol=self.symbol)
+                        if candle_dict is None or not candle_dict.get("is_closed"):
                             rejected_count += 1
                             continue
 
-                        # 2. Check time boundary for this gap
-                        if ts_ms < gap_start_ms:
-                            continue
-                        if ts_ms > gap_end_ms:
+                        ts_ms = int(candle_dict["window_start"].timestamp() * 1000)
+                        batch_min_ts = min(batch_min_ts, ts_ms)
+
+                        # Check time boundary for this gap
+                        if ts_ms < gap_start_ms or ts_ms > gap_end_ms:
                             continue
 
-                        # 3. Check duplicates
+                        # Check duplicates
                         if ts_ms in collected_records:
                             duplicate_count += 1
                             continue
 
-                        # 4. Validate numeric values
-                        try:
-                            open_p = float(item[1])
-                            high_p = float(item[2])
-                            low_p = float(item[3])
-                            close_p = float(item[4])
-                            vol = float(item[5])
-                            turnover = float(item[7]) if len(item) > 7 and item[7] else None
-
-                            if open_p <= 0 or high_p <= 0 or low_p <= 0 or close_p <= 0 or vol < 0:
-                                rejected_count += 1
-                                continue
-
-                            if high_p < low_p:
-                                rejected_count += 1
-                                continue
-
-                            window_start = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-                            window_end = window_start + timedelta(minutes=1)
-
-                            collected_records[ts_ms] = {
-                                "symbol": self.symbol,
-                                "window_start": window_start,
-                                "window_end": window_end,
-                                "open": open_p,
-                                "high": high_p,
-                                "low": low_p,
-                                "close": close_p,
-                                "volume": vol,
-                                "total_trade_value": turnover,
-                                "trade_count": None,
-                                "buy_volume": None,
-                                "sell_volume": None,
-                                "vwap": None,
-                                "trade_imbalance": None,
-                                "source": "historical_rest",
-                                "is_closed": True,
-                                "created_at": datetime.now(timezone.utc)
-                            }
-                            new_candles_count += 1
-                        except (ValueError, TypeError):
-                            rejected_count += 1
-                            continue
+                        collected_records[ts_ms] = candle_dict
+                        new_candles_count += 1
 
                     # Update cursor
                     current_after_ms = int(raw_batch[-1][0])

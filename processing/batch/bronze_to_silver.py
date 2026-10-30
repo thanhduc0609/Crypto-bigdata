@@ -27,9 +27,14 @@ from pyspark.sql.functions import (
     col,
     to_timestamp,
     from_unixtime,
-    date_format
+    date_format,
+    isnan,
+    from_json,
+    trim,
+    expr
 )
 
+from processing.core.schemas import RAW_TRADE_SCHEMA
 from processing.core.spark_session import create_spark_session, load_env_vars
 from processing.core.config import get_pipeline_config
 from storage.s3 import get_bronze_trades_path, get_silver_trades_path
@@ -47,6 +52,9 @@ def process_bronze_to_silver(
     Executes the Bronze to Silver ETL job for BTC trades.
     Returns metrics dictionary with counts of total, valid, and rejected records.
     """
+    if symbol != "BTC-USDT":
+        raise ValueError(f"Medallion Pipeline strictly processes 'BTC-USDT', but received: {symbol}")
+
     bronze_path = get_bronze_trades_path(symbol)
     silver_path = get_silver_trades_path(symbol)
 
@@ -63,9 +71,7 @@ def process_bronze_to_silver(
         print(f"[!] Warning: Could not read Bronze path ({e}). Returning empty result.")
         return {"total": 0, "valid": 0, "rejected": 0, "status": "no_data"}
 
-    if symbol:
-        raw_df = raw_df.filter(col("symbol") == symbol)
-    if trade_date:
+    if trade_date and "trade_date" in raw_df.columns:
         raw_df = raw_df.filter(col("trade_date") == trade_date)
 
     total_records = raw_df.count()
@@ -73,24 +79,44 @@ def process_bronze_to_silver(
         print("[!] No records found in Bronze layer to process.")
         return {"total": 0, "valid": 0, "rejected": 0, "status": "empty"}
 
-    # 1. Validation Conditions
+    # 1. Parse JSON payload if raw Kafka payload exists, otherwise use tabular columns
+    if "raw_payload" in raw_df.columns:
+        parsed_df = (
+            raw_df
+            .withColumn("parsed", from_json(col("raw_payload"), RAW_TRADE_SCHEMA))
+            .select(
+                col("parsed.trade_id").alias("trade_id"),
+                col("parsed.symbol").alias("symbol"),
+                col("parsed.price").alias("price"),
+                col("parsed.size").alias("size"),
+                col("parsed.side").alias("side"),
+                col("parsed.timestamp").alias("raw_timestamp"),
+                col("kafka_partition"),
+                col("kafka_offset"),
+                col("kafka_timestamp").alias("kafka_arrival_time")
+            )
+        )
+    else:
+        parsed_df = raw_df
+
+    # 2. Strict Silver Validation Conditions (reject NaN, Inf, non-BTC, negative/zero prices, empty trade_ids)
     is_valid_condition = (
-        col("trade_id").isNotNull() &
-        (col("symbol") == symbol) &
-        col("price").isNotNull() & (col("price") > 0.0) &
-        col("size").isNotNull() & (col("size") > 0.0) &
+        col("trade_id").isNotNull() & (trim(col("trade_id")) != "") &
+        col("symbol").isNotNull() & (col("symbol") == "BTC-USDT") &
+        col("price").isNotNull() & (~isnan(col("price"))) & (col("price") > 0.0) & (col("price") < float("inf")) &
+        col("size").isNotNull() & (~isnan(col("size"))) & (col("size") > 0.0) & (col("size") < float("inf")) &
         col("raw_timestamp").isNotNull() & (col("raw_timestamp") > 0) &
-        col("side").isin("buy", "sell")
+        col("side").isNotNull() & col("side").isin("buy", "sell")
     )
 
-    valid_df = raw_df.filter(is_valid_condition)
-    invalid_df = raw_df.filter(~is_valid_condition)
+    valid_df = parsed_df.filter(is_valid_condition.isNotNull() & is_valid_condition)
+    invalid_df = parsed_df.filter(is_valid_condition.isNull() | (~is_valid_condition))
 
     rejected_count = invalid_df.count()
     if rejected_count > 0:
-        print(f"[WARN] Detected and isolated {rejected_count} invalid records from Bronze.")
+        print(f"[WARN] Detected and isolated {rejected_count} invalid records from Bronze (excluded from Silver).")
 
-    # 2. Standardization & Deduplication
+    # 3. Standardization & Deduplication
     cleaned_df = (
         valid_df
         .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))

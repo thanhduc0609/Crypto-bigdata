@@ -76,7 +76,7 @@ def cleanup_legacy_batch_tables(conn):
     print("[*] Da don dep cac bang Batch cu khoi schema 'warehouse' thanh cong.")
 
 
-def init_warehouse_schema():
+def init_warehouse_schema(cleanup_legacy: bool = False):
     """Thực thi DDL và Views để khởi tạo Schema Data Warehouse (dim -> fact -> views)"""
     sql_dir = project_root / "warehouse" / "sql"
     dim_dir = sql_dir / "dim"
@@ -99,8 +99,12 @@ def init_warehouse_schema():
 
     print(f"[*] Dang ket noi toi PostgreSQL Data Warehouse: {DB_HOST}:{DB_PORT}/{DB_NAME}")
     with get_db_connection() as conn:
-        # Bước 1: Dọn dẹp bảng batch cũ
-        cleanup_legacy_batch_tables(conn)
+        # Bước 1: Dọn dẹp bảng batch cũ (chỉ chạy khi được chủ động yêu cầu)
+        if cleanup_legacy:
+            print("[*] Thuc hien don dep legacy tables theo yeu cau...")
+            cleanup_legacy_batch_tables(conn)
+        else:
+            print("[*] Bo qua don dep legacy tables (bao toan du lieu hien co).")
 
         # Bước 2: Nạp các tệp DDL và Views theo thứ tự
         with conn.cursor() as cur:
@@ -143,8 +147,13 @@ def init_warehouse_schema():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Init PostgreSQL Data Warehouse Schema")
+    parser.add_argument("--cleanup-legacy", action="store_true", help="Explicitly cleanup legacy tables")
+    args = parser.parse_args()
+
     try:
-        init_warehouse_schema()
+        init_warehouse_schema(cleanup_legacy=args.cleanup_legacy)
     except Exception as e:
         print(f"[ERROR] Khong the khoi tao Schema: {e}")
         sys.exit(1)

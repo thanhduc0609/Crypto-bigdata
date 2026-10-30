@@ -13,6 +13,8 @@ Saves output to Gold Parquet Lakehouse and PostgreSQL fact_crypto_1m_candles.
 
 import os
 import sys
+import time
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -21,6 +23,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from pyspark.sql import SparkSession
+from pyspark.sql.window import Window
 from pyspark.sql.functions import (
     col,
     window,
@@ -30,7 +33,8 @@ from pyspark.sql.functions import (
     count as spark_count,
     when,
     expr,
-    lit
+    lit,
+    row_number
 )
 
 from processing.core.spark_session import create_spark_session, load_env_vars
@@ -49,7 +53,17 @@ def process_silver_to_gold(
 ) -> Dict[str, Any]:
     """
     Transforms Silver trades into 1-minute Gold OHLCV + microstructure candles.
+    Enforces:
+      - BTC-USDT only
+      - Strict event-time Open/Close tie-break with (raw_timestamp, trade_id)
+      - is_closed evaluated by comparing window.end with max_trade_time
+      - Deterministic reconciliation (no arbitrary dropDuplicates union)
+      - Staging publish pattern (avoids read-overwrite cycle in same Spark lineage)
+      - Propagates schema/permission/corruption errors loudly
     """
+    if symbol != "BTC-USDT":
+        raise ValueError(f"Medallion Pipeline strictly processes 'BTC-USDT', but received: {symbol}")
+
     silver_path = get_silver_trades_path(symbol)
     gold_path = get_gold_candles_path(symbol)
 
@@ -72,6 +86,9 @@ def process_silver_to_gold(
     if trades_df.count() == 0:
         print("[!] No trades found in Silver layer to aggregate.")
         return {"candles_count": 0, "status": "empty"}
+
+    # Determine latest event time in this dataset to accurately determine closed vs in-flight windows
+    max_trade_time = trades_df.select(spark_max("trade_time")).collect()[0][0]
 
     # Event-time aggregation with tumbling 1-minute window
     # In PySpark 3.5+, expr("min_by(price, raw_timestamp)") guarantees exact event-time Open/Close
@@ -100,6 +117,10 @@ def process_silver_to_gold(
                 (col("buy_volume") - col("sell_volume")) / (col("buy_volume") + col("sell_volume"))
             ).otherwise(0.0)
         )
+        .withColumn(
+            "is_closed",
+            when(col("window.end") <= lit(max_trade_time), lit(True)).otherwise(lit(False))
+        )
         .select(
             col("window.start").alias("window_start"),
             col("window.end").alias("window_end"),
@@ -116,31 +137,90 @@ def process_silver_to_gold(
             col("trade_imbalance"),
             col("total_trade_value"),
             lit("realtime_stream").alias("source"),
-            lit(True).alias("is_closed")
+            col("is_closed")
         )
         .orderBy("window_start")
     )
 
     candle_count = candles_df.count()
 
-    # 1. Write to Gold Parquet with Deduplication (Idempotent merge on symbol & window_start)
-    try:
-        existing_gold = spark.read.parquet(gold_path).filter(col("symbol") == symbol)
-        combined_df = existing_gold.unionByName(candles_df, allowMissingColumns=True)
-        final_gold = combined_df.dropDuplicates(["symbol", "window_start"]).orderBy("window_start")
-    except Exception:
+    # 1. Read existing Gold safely (fail loudly on corrupt files, only treat non-existence as initial run)
+    is_local = not gold_path.startswith("s3a://") and not gold_path.startswith("s3://")
+    existing_gold = None
+
+    if is_local:
+        local_gold_p = Path(gold_path)
+        if local_gold_p.exists() and any(local_gold_p.rglob("*.parquet")):
+            try:
+                existing_gold = spark.read.parquet(gold_path).filter(col("symbol") == symbol)
+            except Exception as read_err:
+                print(f"[!] Critical error reading existing Gold Parquet at {gold_path}: {read_err}")
+                raise read_err
+    else:
+        try:
+            existing_gold = spark.read.parquet(gold_path).filter(col("symbol") == symbol)
+        except Exception as s3_err:
+            err_msg = str(s3_err).lower()
+            if "path does not exist" in err_msg or "filenotfoundexception" in err_msg or "nosuchkey" in err_msg:
+                existing_gold = None
+            else:
+                print(f"[!] Critical error reading S3 Gold at {gold_path}: {s3_err}")
+                raise s3_err
+
+    # 2. Deterministic Reconciliation: newly computed candles supersede existing candles for touched minutes;
+    # untouched historical minutes are preserved without loss.
+    if existing_gold is not None:
+        w = Window.partitionBy("symbol", "window_start").orderBy(
+            col("batch_priority").desc(),
+            col("is_closed").desc(),
+            col("trade_count").desc_nulls_last()
+        )
+        combined = (
+            candles_df.withColumn("batch_priority", lit(1))
+            .unionByName(existing_gold.withColumn("batch_priority", lit(0)), allowMissingColumns=True)
+        )
+        final_gold = (
+            combined
+            .withColumn("rn", row_number().over(w))
+            .filter(col("rn") == 1)
+            .drop("rn", "batch_priority")
+            .orderBy("window_start")
+        )
+    else:
         final_gold = candles_df
 
+    # 3. Safe Staging & Publish pattern (prevents reading and overwriting same path in single Spark lineage)
+    staging_path = f"{gold_path}_staging_{int(time.time())}"
     (
         final_gold.write
         .mode("overwrite")
         .partitionBy("symbol")
-        .parquet(gold_path)
+        .parquet(staging_path)
     )
+
+    # Publish staging to target gold_path
+    if is_local:
+        target_dir = Path(gold_path)
+        staging_dir = Path(staging_path)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for item in staging_dir.iterdir():
+            dest = target_dir / item.name
+            if dest.exists():
+                if dest.is_dir():
+                    shutil.rmtree(dest)
+                else:
+                    dest.unlink()
+            shutil.move(str(item), str(dest))
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+    else:
+        # Note on AWS S3: Directory publishing is object-by-object eventual consistency, not an atomic filesystem rename.
+        staging_df = spark.read.parquet(staging_path)
+        staging_df.write.mode("overwrite").partitionBy("symbol").parquet(gold_path)
 
     print(f"[SUCCESS] Gold 1-minute candles generated: {candle_count:,} new candles processed; saved to {gold_path}")
 
-    # 2. Sync to PostgreSQL Warehouse if requested
+    # 4. Sync to PostgreSQL Warehouse if requested
     if sync_to_postgres and candle_count > 0:
         print("[*] Synchronizing Gold candles to PostgreSQL warehouse.fact_crypto_1m_candles...")
         write_candles_batch(candles_df, batch_id=0)

@@ -72,6 +72,18 @@ def get_gold_candles_path(symbol: str = "BTC-USDT") -> str:
         return str(local_dir).replace("\\", "/")
 
 
+def get_speed_candles_path(symbol: str = "BTC-USDT") -> str:
+    """Returns the storage path for auxiliary speed layer streaming candles (non-canonical)."""
+    if get_storage_mode() == "s3":
+        bucket = get_s3_bucket()
+        rel = storage_cfg.get("s3", {}).get("speed_candles_path", "crypto/streaming/candles_1m")
+        return f"s3a://{bucket}/{rel}"
+    else:
+        local_dir = project_root / "data" / "lake" / "speed" / "candles_1m"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        return str(local_dir).replace("\\", "/")
+
+
 def get_gold_features_path(symbol: str = "BTC-USDT") -> str:
     """Returns the storage path for Gold Feature Store datasets."""
     if get_storage_mode() == "s3":

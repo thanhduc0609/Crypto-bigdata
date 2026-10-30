@@ -24,7 +24,8 @@ from pyspark.sql.functions import (
     from_json,
     to_timestamp,
     from_unixtime,
-    date_format
+    date_format,
+    lit
 )
 
 from processing.core.schemas import RAW_TRADE_SCHEMA
@@ -72,29 +73,20 @@ def start_bronze_writer(
         .load()
     )
 
-    # 2. Extract JSON payload and Kafka metadata
+    # 2. Extract raw Kafka payload and transport telemetry (Bronze raw archive)
     bronze_df = (
         raw_kafka_df
         .select(
-            from_json(col("value").cast("string"), RAW_TRADE_SCHEMA).alias("trade"),
+            col("key").cast("string").alias("kafka_key"),
+            col("value").cast("string").alias("raw_payload"),
+            col("topic").alias("kafka_topic"),
             col("partition").alias("kafka_partition"),
             col("offset").alias("kafka_offset"),
-            col("timestamp").alias("kafka_arrival_time")
+            col("timestamp").alias("kafka_timestamp"),
+            col("timestampType").alias("kafka_timestamp_type")
         )
-        .select(
-            col("trade.trade_id").alias("trade_id"),
-            col("trade.symbol").alias("symbol"),
-            col("trade.price").alias("price"),
-            col("trade.size").alias("size"),
-            col("trade.side").alias("side"),
-            col("trade.timestamp").alias("raw_timestamp"),
-            col("kafka_partition"),
-            col("kafka_offset"),
-            col("kafka_arrival_time")
-        )
-        .filter(col("symbol") == target_symbol)
-        .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))
-        .withColumn("trade_date", date_format(col("trade_time"), "yyyy-MM-dd"))
+        .withColumn("symbol", lit(target_symbol))
+        .withColumn("trade_date", date_format(col("kafka_timestamp"), "yyyy-MM-dd"))
     )
 
     # 3. Append to Bronze Parquet

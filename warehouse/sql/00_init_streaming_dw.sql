@@ -9,13 +9,9 @@ CREATE SCHEMA IF NOT EXISTS warehouse;
 SET search_path TO warehouse, public;
 
 -- -----------------------------------------------------------------------------
--- 0. CLEANUP LEGACY BATCH TABLES & VIEWS
+-- 0. INITIALIZATION & VIEW MANAGEMENT (NON-DESTRUCTIVE)
+-- Note: Legacy table drops are decoupled into explicit administrative tasks.
 -- -----------------------------------------------------------------------------
-DROP TABLE IF EXISTS warehouse.fact_crypto_funding_rates CASCADE;
-DROP TABLE IF EXISTS warehouse.fact_crypto_liquidations CASCADE;
-DROP TABLE IF EXISTS warehouse.fact_crypto_long_short_ratio CASCADE;
-DROP TABLE IF EXISTS warehouse.fact_crypto_open_interest CASCADE;
-DROP TABLE IF EXISTS warehouse.fact_market_predictions CASCADE;
 
 DROP VIEW IF EXISTS warehouse.vw_whale_trades CASCADE;
 DROP VIEW IF EXISTS warehouse.vw_rolling_5m_metrics CASCADE;

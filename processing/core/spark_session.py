@@ -98,6 +98,7 @@ def create_spark_session(
         .config("spark.local.dir", str(spark_temp))
         .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
         .config("spark.sql.parquet.enableVectorizedReader", "false")
+        .config("spark.sql.session.timeZone", "UTC")
     )
 
     if packages:
