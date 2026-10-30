@@ -6,7 +6,7 @@ ml:
   target_symbol: "BTC-USDT"
   model_type: "XGBClassifier"
   model_name: "btc_xgboost_direction"
-  model_version: "1.0.0"
+  model_version: "2.0.0"
 
 prediction:
   horizon_minutes: 5
@@ -32,12 +32,12 @@ features:
     - "sma_15"
     - "ema_12"
     - "ema_26"
-    - "rsi_14"
     - "macd"
     - "macd_signal"
     - "bb_upper"
     - "bb_lower"
     - "bb_bandwidth"
+    - "rsi_14"
     - "rolling_volatility_15m"
   extended_microstructure_features:
     - "buy_sell_ratio"

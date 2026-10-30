@@ -1,12 +1,12 @@
 """
 =============================================================================
-Crypto Big Data Streaming - Spark Clean, Transform, Whale Alert & S3 Pipeline
+Crypto Big Data Streaming - Spark Clean, Transform, Whale Alert & Lakehouse
 =============================================================================
 Architecture:
   OKX WebSocket -> Kafka -> Spark Structured Streaming -> Data Cleaning 
-  -> Real-time Whale Alerts (>= $10,000)
-  -> 1m Window Aggregations (OHLC, VWAP, Imbalance) 
-  -> AWS S3 (Raw & Processed Data Lake) / HDFS / Console
+  -> Real-time Whale Alerts & Fact Trades Sink (>= $10,000)
+  -> 1m Tumbling Window Aggregations (OHLC, VWAP, Imbalance) 
+  -> S3 / Local Parquet Lakehouse & PostgreSQL Data Warehouse
 =============================================================================
 """
 
@@ -29,21 +29,26 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
     from_json,
-    to_timestamp,
-    from_unixtime,
     date_format,
     window,
-    first,
-    last,
     min as spark_min,
     max as spark_max,
     sum as spark_sum,
     count as spark_count,
-    when
+    when,
+    expr,
+    lit
 )
 
 from processing.core.schemas import RAW_TRADE_SCHEMA
 from processing.core.spark_session import create_spark_session, load_env_vars
+from storage.s3 import (
+    get_storage_mode,
+    get_s3_bucket,
+    get_bronze_trades_path,
+    get_gold_candles_path,
+    get_checkpoint_path
+)
 from warehouse.etl.streaming_sink import write_whales_batch, write_candles_batch
 
 load_env_vars()
@@ -51,26 +56,22 @@ load_env_vars()
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
+TARGET_SYMBOL = "BTC-USDT"
 KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC_TRADES", os.getenv("KAFKA_TOPIC", "crypto-trades"))
 
-STORAGE_DESTINATION = os.getenv("STORAGE_DESTINATION", "s3").lower()
-S3_RAW_PATH = os.getenv("S3_STREAMING_RAW_PATH", os.getenv("S3_RAW_PATH", f"s3a://{S3_BUCKET}/crypto/streaming/trades"))
-if "${S3_BUCKET_NAME}" in S3_RAW_PATH:
-    S3_RAW_PATH = S3_RAW_PATH.replace("${S3_BUCKET_NAME}", S3_BUCKET)
+S3_BUCKET = get_s3_bucket()
+STORAGE_DESTINATION = get_storage_mode()
 
-S3_PROCESSED_PATH = os.getenv("S3_STREAMING_CANDLES_PATH", os.getenv("S3_PROCESSED_PATH", f"s3a://{S3_BUCKET}/crypto/streaming/candles_1m"))
-if "${S3_BUCKET_NAME}" in S3_PROCESSED_PATH:
-    S3_PROCESSED_PATH = S3_PROCESSED_PATH.replace("${S3_BUCKET_NAME}", S3_BUCKET)
-# Checkpoint Configuration
-# Mặc định sử dụng local checkpoints để đạt tốc độ cao nhất (0ms latency), 
-# không tốn chi phí gọi S3 API định kỳ và tránh lỗi atomic rename trên Windows.
+S3_RAW_PATH = get_bronze_trades_path(TARGET_SYMBOL)
+S3_PROCESSED_PATH = get_gold_candles_path(TARGET_SYMBOL)
+
+# Checkpoint Configuration (defaults to local for zero latency on Windows)
 USE_S3_CHECKPOINTS = os.getenv("USE_S3_CHECKPOINTS", "false").lower() in ("true", "1")
-
 checkpoint_base = project_root / "data" / "checkpoints"
 checkpoint_base.mkdir(parents=True, exist_ok=True)
 
-if USE_S3_CHECKPOINTS:
+if USE_S3_CHECKPOINTS and STORAGE_DESTINATION == "s3":
     CHECKPOINT_RAW = f"s3a://{S3_BUCKET}/checkpoints/trades_raw"
     CHECKPOINT_PROCESSED = f"s3a://{S3_BUCKET}/checkpoints/trades_1m"
 else:
@@ -83,28 +84,28 @@ CHECKPOINT_DW_CANDLES = str(checkpoint_base / "dw_candles").replace("\\", "/")
 
 ENABLE_DW_STREAMING = os.getenv("ENABLE_DW_STREAMING", "true").lower() in ("true", "1")
 
-HDFS_RAW_PATH = os.getenv("HDFS_RAW_PATH", "hdfs://localhost:9000/crypto/raw/trades")
-HDFS_PROCESSED_PATH = os.getenv("HDFS_PROCESSED_PATH", "hdfs://localhost:9000/crypto/processed/trades_1m")
-HDFS_CHECKPOINT_RAW = os.getenv("HDFS_CHECKPOINT_RAW", "hdfs://localhost:9000/checkpoints/trades_raw")
-HDFS_CHECKPOINT_PROCESSED = os.getenv("HDFS_CHECKPOINT_PROCESSED", "hdfs://localhost:9000/checkpoints/trades_1m")
-
 WATERMARK_DELAY = os.getenv("STREAMING_WATERMARK_DELAY", "2 minutes")
 WINDOW_DURATION = os.getenv("STREAMING_WINDOW_DURATION", "1 minute")
 TRIGGER_INTERVAL = os.getenv("STREAMING_TRIGGER_INTERVAL", "10 seconds")
-WHALE_ALERT_THRESHOLD = float(os.getenv("WHALE_ALERT_THRESHOLD_USD", "500000.0"))
+
+# Large trade storage threshold (fact_crypto_trades >= $10k) and console alert (>= $500k)
+LARGE_TRADE_STORAGE_THRESHOLD = 10000.0
+WHALE_CONSOLE_ALERT_THRESHOLD = float(os.getenv("WHALE_ALERT_THRESHOLD_USD", "500000.0"))
 
 
 def process_crypto_streams(spark: SparkSession):
     print("=" * 80)
     print("CRYPTO BIG DATA STREAMING - SPEED LAYER (CLEAN, AGGREGATE & WHALE ALERT)")
     print(f"Spark Version        : {spark.version}")
+    print(f"Target Symbol        : {TARGET_SYMBOL}")
     print(f"Kafka Bootstrap      : {KAFKA_SERVER}")
     print(f"Kafka Topic          : {KAFKA_TOPIC}")
-    print(f"Whale Alert (> USD)  : ${WHALE_ALERT_THRESHOLD:,.2f}")
+    print(f"Console Alert (> USD): ${WHALE_CONSOLE_ALERT_THRESHOLD:,.2f}")
+    print(f"DW Storage (> USD)   : ${LARGE_TRADE_STORAGE_THRESHOLD:,.2f}")
     print(f"Storage Destination  : {STORAGE_DESTINATION.upper()}")
     print("=" * 80)
 
-    # 1. INGESTION: Đọc raw stream từ Kafka
+    # 1. INGESTION: Read raw Kafka stream
     kafka_raw_stream = (
         spark.readStream
         .format("kafka")
@@ -115,7 +116,7 @@ def process_crypto_streams(spark: SparkSession):
         .load()
     )
 
-    # 2. PARSE JSON
+    # 2. PARSE JSON & EXTRACT KAFKA TELEMETRY
     parsed_stream = (
         kafka_raw_stream
         .select(
@@ -138,32 +139,43 @@ def process_crypto_streams(spark: SparkSession):
     )
 
     # 3. DATA CLEANING & WATERMARKING
+    # Preserves millisecond precision via cast to timestamp; strictly filters BTC-USDT
     cleaned_trades_stream = (
         parsed_stream
         .filter(
             col("trade_id").isNotNull() &
             col("symbol").isNotNull() &
-            (col("symbol") == "BTC-USDT") &
+            (col("symbol") == TARGET_SYMBOL) &
             col("price").isNotNull() & (col("price") > 0.0) &
             col("size").isNotNull() & (col("size") > 0.0) &
             col("raw_timestamp").isNotNull() & (col("raw_timestamp") > 0) &
             col("side").isin("buy", "sell")
         )
-        .withColumn("trade_time", to_timestamp(from_unixtime(col("raw_timestamp") / 1000)))
+        .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))
         .withColumn("trade_value", col("price") * col("size"))
         .withColumn("trade_date", date_format(col("trade_time"), "yyyy-MM-dd"))
         .withWatermark("trade_time", WATERMARK_DELAY)
         .dropDuplicates(["trade_id", "trade_time"])
     )
 
-    # 4. REAL-TIME WHALE ALERT STREAM (Phát hiện giao dịch lớn tức thời)
-    whale_trades_stream = (
+    # 4. REAL-TIME WHALE & LARGE TRADE DETECTION
+    # Persist all high-value trades >= $10,000 into DW; classify by tier
+    large_trades_stream = (
         cleaned_trades_stream
-        .filter(col("trade_value") >= WHALE_ALERT_THRESHOLD)
+        .filter(col("trade_value") >= LARGE_TRADE_STORAGE_THRESHOLD)
+        .withColumn(
+            "whale_tier",
+            when(col("trade_value") >= 500000.0, "Mega Whale (>= $500K)")
+            .when(col("trade_value") >= 100000.0, "Big Whale ($100K - $500K)")
+            .when(col("trade_value") >= 50000.0, "Whale ($50K - $100K)")
+            .otherwise("Large Order ($10K - $50K)")
+        )
     )
 
-    whale_stream = (
-        whale_trades_stream
+    # High-priority alerts to console (Mega Whales >= $500,000)
+    whale_console_stream = (
+        large_trades_stream
+        .filter(col("trade_value") >= WHALE_CONSOLE_ALERT_THRESHOLD)
         .select(
             col("trade_time"),
             col("symbol"),
@@ -171,13 +183,12 @@ def process_crypto_streams(spark: SparkSession):
             col("price"),
             col("size"),
             col("trade_value"),
-            when(col("trade_value") >= 2000000.0, "🚨 MEGA WHALE (>= $2M)")
-            .when(col("trade_value") >= 1000000.0, "⚡ BIG WHALE (>= $1M)")
-            .otherwise(f"🐋 WHALE (>= ${int(WHALE_ALERT_THRESHOLD):,})").alias("whale_tier")
+            col("whale_tier")
         )
     )
 
-    # 5. 1-MINUTE CANDLESTICK & METRIC AGGREGATIONS
+    # 5. 1-MINUTE CANDLESTICK AGGREGATIONS (NON-OVERLAPPING TUMBLING WINDOW)
+    # Open/Close ordered strictly by (raw_timestamp, trade_id) for deterministic tie-break
     agg_1m_stream = (
         cleaned_trades_stream
         .groupBy(
@@ -185,10 +196,10 @@ def process_crypto_streams(spark: SparkSession):
             col("symbol")
         )
         .agg(
-            first("price").alias("open"),
+            expr("min_by(price, struct(raw_timestamp, trade_id))").alias("open"),
             spark_max("price").alias("high"),
             spark_min("price").alias("low"),
-            last("price").alias("close"),
+            expr("max_by(price, struct(raw_timestamp, trade_id))").alias("close"),
             spark_sum("size").alias("volume"),
             spark_count("trade_id").alias("trade_count"),
             spark_sum("trade_value").alias("total_trade_value"),
@@ -217,16 +228,18 @@ def process_crypto_streams(spark: SparkSession):
             col("sell_volume"),
             col("vwap"),
             col("trade_imbalance"),
-            col("total_trade_value")
+            col("total_trade_value"),
+            lit("realtime_stream").alias("source"),
+            lit(True).alias("is_closed")
         )
     )
 
     queries = []
 
-    # OUTPUT: Whale Alerts ra Console
-    print("[OUTPUT] Activating Real-time Whale Alert Stream...")
+    # OUTPUT: Console Whale Alerts
+    print("[OUTPUT] Activating Real-time Whale Console Alert Stream...")
     whale_query = (
-        whale_stream.writeStream
+        whale_console_stream.writeStream
         .format("console")
         .outputMode("append")
         .option("truncate", "false")
@@ -235,11 +248,11 @@ def process_crypto_streams(spark: SparkSession):
     )
     queries.append(whale_query)
 
-    # OUTPUT: PostgreSQL Data Warehouse Sink (Chỉ lưu Nến 1m và Cá mập để giữ Postgres luôn nhẹ)
+    # OUTPUT: PostgreSQL Data Warehouse Sink
     if ENABLE_DW_STREAMING:
-        print("[OUTPUT] Activating Real-time PostgreSQL Data Warehouse Sinks (1m Candles & Whale Alerts)...")
+        print("[OUTPUT] Activating PostgreSQL Data Warehouse Sinks (fact_crypto_trades & fact_crypto_1m_candles)...")
         dw_whales_query = (
-            whale_trades_stream.writeStream
+            large_trades_stream.writeStream
             .outputMode("append")
             .foreachBatch(write_whales_batch)
             .trigger(processingTime=TRIGGER_INTERVAL)
@@ -258,9 +271,9 @@ def process_crypto_streams(spark: SparkSession):
         )
         queries.append(dw_candles_query)
 
-    # OUTPUT: S3 Data Lake
-    if STORAGE_DESTINATION in ["s3", "all"]:
-        print(f"[OUTPUT] Writing Raw Cleaned Stream -> S3: {S3_RAW_PATH}")
+    # OUTPUT: S3 / Local Parquet Lakehouse Sink
+    if STORAGE_DESTINATION in ["s3", "local"]:
+        print(f"[OUTPUT] Writing Raw Cleaned Stream -> Lakehouse: {S3_RAW_PATH}")
         raw_s3_query = (
             cleaned_trades_stream.writeStream
             .format("parquet")
@@ -273,7 +286,7 @@ def process_crypto_streams(spark: SparkSession):
         )
         queries.append(raw_s3_query)
 
-        print(f"[OUTPUT] Writing Processed 1m Aggregations -> S3: {S3_PROCESSED_PATH}")
+        print(f"[OUTPUT] Writing Processed 1m Aggregations -> Lakehouse: {S3_PROCESSED_PATH}")
         processed_s3_query = (
             agg_1m_stream.writeStream
             .format("parquet")
@@ -285,34 +298,6 @@ def process_crypto_streams(spark: SparkSession):
             .start()
         )
         queries.append(processed_s3_query)
-
-    # OUTPUT: HDFS
-    if STORAGE_DESTINATION in ["hdfs", "all"]:
-        print(f"[OUTPUT] Writing Raw Cleaned Stream -> HDFS: {HDFS_RAW_PATH}")
-        raw_hdfs_query = (
-            cleaned_trades_stream.writeStream
-            .format("parquet")
-            .outputMode("append")
-            .option("path", HDFS_RAW_PATH)
-            .option("checkpointLocation", HDFS_CHECKPOINT_RAW)
-            .partitionBy("symbol")
-            .trigger(processingTime=TRIGGER_INTERVAL)
-            .start()
-        )
-        queries.append(raw_hdfs_query)
-
-        print(f"[OUTPUT] Writing Processed 1m Aggregations -> HDFS: {HDFS_PROCESSED_PATH}")
-        processed_hdfs_query = (
-            agg_1m_stream.writeStream
-            .format("parquet")
-            .outputMode("append")
-            .option("path", HDFS_PROCESSED_PATH)
-            .option("checkpointLocation", HDFS_CHECKPOINT_PROCESSED)
-            .partitionBy("symbol")
-            .trigger(processingTime=TRIGGER_INTERVAL)
-            .start()
-        )
-        queries.append(processed_hdfs_query)
 
     print("\n>>> Speed Layer is actively streaming. Press CTRL + C to stop.\n")
     for q in queries:
@@ -329,3 +314,4 @@ if __name__ == "__main__":
     finally:
         if spark:
             spark.stop()
+

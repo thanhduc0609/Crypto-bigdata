@@ -138,6 +138,10 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
                 cur = None
 
             for row in data:
+                # OKX candle schema: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+                confirm = str(row[8]) if len(row) > 8 else "1"
+                is_closed = bool(confirm != "0")
+
                 ts_ms = int(row[0])
                 dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
                 dt_end = dt + timedelta(minutes=1)
@@ -153,23 +157,25 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
                     "close": c,
                     "volume": v,
                     "total_trade_value": vol_ccy,
-                    "source": "okx_live_sync"
+                    "source": "okx_live_sync",
+                    "is_closed": is_closed
                 })
 
                 if cur:
                     try:
                         cur.execute("""
                             INSERT INTO warehouse.fact_crypto_1m_candles (
-                                symbol, window_start, window_end, open, high, low, close, volume, total_trade_value, source
+                                symbol, window_start, window_end, open, high, low, close, volume, total_trade_value, source, is_closed
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (symbol, window_start) DO UPDATE SET
                                 close = EXCLUDED.close,
                                 high = EXCLUDED.high,
                                 low = EXCLUDED.low,
                                 volume = EXCLUDED.volume,
-                                total_trade_value = EXCLUDED.total_trade_value;
-                        """, ("BTC-USDT", dt, dt_end, o, h, l, c, v, vol_ccy, "okx_live_sync"))
+                                total_trade_value = EXCLUDED.total_trade_value,
+                                is_closed = EXCLUDED.is_closed;
+                        """, ("BTC-USDT", dt, dt_end, o, h, l, c, v, vol_ccy, "okx_live_sync", is_closed))
                     except Exception:
                         pass
 
@@ -182,8 +188,10 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
                     pass
 
             df_live = pd.DataFrame(records).sort_values("window_start").reset_index(drop=True)
-            print(f"[PREDICT] Synced and loaded {len(df_live)} live 1m candles directly from OKX.")
-            return df_live
+            # Filter strictly for closed finalized candles for feature calculation
+            df_finalized = df_live[df_live["is_closed"] == True].copy().reset_index(drop=True)
+            print(f"[PREDICT] Synced {len(df_live)} candles from OKX ({len(df_finalized)} finalized/closed).")
+            return df_finalized if not df_finalized.empty else df_live
     except Exception as e:
         print(f"[PREDICT] Note: Live OKX REST fetch error ({e}).")
 
@@ -363,9 +371,9 @@ def backfill_actual_outcomes(candles_df: pd.DataFrame):
 
         for r in rows:
             pred_id, feat_ts, cur_px, tgt_ts, pred_dir = r[0], r[1], r[2], r[3], r[4]
-            # Match candle closest to target_ts
+            # Match candle strictly equal to target_ts (within 30 seconds of target minute)
             time_diffs = (candles_df[time_col] - pd.to_datetime(tgt_ts)).dt.total_seconds().abs()
-            valid_mask = time_diffs <= 90
+            valid_mask = time_diffs <= 30
             if valid_mask.any():
                 closest_idx = time_diffs[valid_mask].idxmin()
                 future_px = float(candles_df.loc[closest_idx, "close"])

@@ -330,6 +330,7 @@ class OKXHistoricalBackfill:
                                 "vwap": None,
                                 "trade_imbalance": None,
                                 "source": "historical_rest",
+                                "is_closed": True,
                                 "created_at": datetime.now(timezone.utc)
                             }
                             new_candles_count += 1

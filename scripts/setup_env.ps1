@@ -4,7 +4,7 @@
 # KIẾN TRÚC HỆ THỐNG: PURE REAL-TIME STREAMING & DATA LAKE
 #
 #   1. THU THẬP & TRUYỀN TẢI:
-#      OKX WebSocket (BTC, ETH, SOL) -> Python Multi-Stream Producer -> Apache Kafka (KRaft)
+#      OKX WebSocket (BTC-USDT Dedicated) -> Python Producer -> Apache Kafka (KRaft)
 #
 #   2. XỬ LÝ PHÂN TÁN (SPARK STRUCTURED STREAMING):
 #      - Lọc sạch & chuẩn hóa dữ liệu giao dịch

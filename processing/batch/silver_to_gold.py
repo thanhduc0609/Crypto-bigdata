@@ -82,10 +82,10 @@ def process_silver_to_gold(
             col("symbol")
         )
         .agg(
-            expr("min_by(price, raw_timestamp)").alias("open"),
+            expr("min_by(price, struct(raw_timestamp, trade_id))").alias("open"),
             spark_max("price").alias("high"),
             spark_min("price").alias("low"),
-            expr("max_by(price, raw_timestamp)").alias("close"),
+            expr("max_by(price, struct(raw_timestamp, trade_id))").alias("close"),
             spark_sum("size").alias("volume"),
             spark_count("trade_id").alias("trade_count"),
             spark_sum("trade_value").alias("total_trade_value"),
@@ -115,31 +115,36 @@ def process_silver_to_gold(
             col("vwap"),
             col("trade_imbalance"),
             col("total_trade_value"),
-            lit("realtime_stream").alias("source")
+            lit("realtime_stream").alias("source"),
+            lit(True).alias("is_closed")
         )
         .orderBy("window_start")
     )
 
     candle_count = candles_df.count()
 
-    # 1. Write to Gold Parquet
+    # 1. Write to Gold Parquet with Deduplication (Idempotent merge on symbol & window_start)
+    try:
+        existing_gold = spark.read.parquet(gold_path).filter(col("symbol") == symbol)
+        combined_df = existing_gold.unionByName(candles_df, allowMissingColumns=True)
+        final_gold = combined_df.dropDuplicates(["symbol", "window_start"]).orderBy("window_start")
+    except Exception:
+        final_gold = candles_df
+
     (
-        candles_df.write
-        .mode("append")
+        final_gold.write
+        .mode("overwrite")
         .partitionBy("symbol")
         .parquet(gold_path)
     )
 
-    print(f"[SUCCESS] Gold 1-minute candles generated: {candle_count:,} candles written to {gold_path}")
+    print(f"[SUCCESS] Gold 1-minute candles generated: {candle_count:,} new candles processed; saved to {gold_path}")
 
     # 2. Sync to PostgreSQL Warehouse if requested
     if sync_to_postgres and candle_count > 0:
         print("[*] Synchronizing Gold candles to PostgreSQL warehouse.fact_crypto_1m_candles...")
-        try:
-            write_candles_batch(candles_df, batch_id=0)
-            print("[OK] Successfully synchronized to PostgreSQL Data Warehouse.")
-        except Exception as e:
-            print(f"[!] Warning syncing to Postgres: {e}")
+        write_candles_batch(candles_df, batch_id=0)
+        print("[OK] Successfully synchronized to PostgreSQL Data Warehouse.")
 
     return {
         "candles_count": candle_count,

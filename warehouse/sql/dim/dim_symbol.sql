@@ -31,12 +31,10 @@ ALTER TABLE dim_symbol ADD COLUMN IF NOT EXISTS price_precision INT DEFAULT 2;
 ALTER TABLE dim_symbol ADD COLUMN IF NOT EXISTS volume_precision INT DEFAULT 4;
 ALTER TABLE dim_symbol ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 
--- Seed / Cập nhật cấu hình phân luồng Kafka và ngưỡng cảnh báo cho từng cặp giao dịch
+-- Seed / Cập nhật cấu hình phân luồng Kafka và ngưỡng cảnh báo cho BTC-USDT
 INSERT INTO dim_symbol (symbol, base_asset, quote_asset, exchange, kafka_topic, kafka_partition, whale_threshold_usd, price_precision, volume_precision, is_active)
 VALUES 
-    ('BTC-USDT', 'BTC', 'USDT', 'OKX', 'crypto-trades', 0, 500000.00, 2, 4, TRUE),
-    ('ETH-USDT', 'ETH', 'USDT', 'OKX', 'crypto-trades', 1, 500000.00, 2, 4, FALSE),
-    ('SOL-USDT', 'SOL', 'USDT', 'OKX', 'crypto-trades', 2, 500000.00, 2, 4, FALSE)
+    ('BTC-USDT', 'BTC', 'USDT', 'OKX', 'crypto-trades', 0, 500000.00, 2, 4, TRUE)
 ON CONFLICT (symbol) DO UPDATE SET
     kafka_topic = EXCLUDED.kafka_topic,
     kafka_partition = EXCLUDED.kafka_partition,
@@ -45,3 +43,4 @@ ON CONFLICT (symbol) DO UPDATE SET
     volume_precision = EXCLUDED.volume_precision,
     is_active = EXCLUDED.is_active,
     updated_at = CURRENT_TIMESTAMP;
+

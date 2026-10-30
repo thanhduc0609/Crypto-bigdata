@@ -157,35 +157,35 @@ def add_future_direction_target(
     horizon_minutes: int = DEFAULT_HORIZON
 ) -> pd.DataFrame:
     """
-    Constructs the binary target variable for future price direction:
+    Constructs the binary target variable for future price direction strictly matching
+    the exact timestamp t + horizon_minutes (NOT defaulting to 5 rows):
       future_return = (close[t + horizon] - close[t]) / close[t]
       target_direction = 1 if future_return > 0 else 0
-    Enforces timestamp continuity: only assigns label if the t + horizon row is
-    within horizon * 60 seconds of time t.
+    If no candle exists at exact target time (e.g., due to missing minutes / network gap),
+    the target remains NaN to prevent lookahead or incorrect horizon labeling.
     """
     df = df.copy()
     time_col = "window_start" if "window_start" in df.columns else "timestamp"
-    df[time_col] = pd.to_datetime(df[time_col])
+    df[time_col] = pd.to_datetime(df[time_col], utc=True)
     df = df.sort_values(time_col).reset_index(drop=True)
 
-    n = len(df)
-    future_returns = [np.nan] * n
-    target_directions = [np.nan] * n
-    horizon_seconds = horizon_minutes * 60
+    # Fast and strictly timestamp-matched alignment:
+    # Build series indexed by exact UTC timestamp
+    close_series = pd.Series(df["close"].astype(float).values, index=df[time_col])
 
-    for i in range(n - horizon_minutes):
-        current_time = df.loc[i, time_col]
-        current_close = float(df.loc[i, "close"])
+    # Target timestamp for each row is exact t + horizon_minutes
+    target_timestamps = df[time_col] + pd.Timedelta(minutes=horizon_minutes)
 
-        target_time = df.loc[i + horizon_minutes, time_col]
-        target_close = float(df.loc[i + horizon_minutes, "close"])
+    # Reindex matches EXACT timestamp (NaN if candle is missing)
+    future_closes = close_series.reindex(target_timestamps).values
+    current_closes = df["close"].astype(float).values
 
-        # Check consecutive timestamp alignment (allow +/- 15s drift)
-        elapsed = (target_time - current_time).total_seconds()
-        if abs(elapsed - horizon_seconds) <= 30 and current_close > 0:
-            ret = (target_close - current_close) / current_close
-            future_returns[i] = ret
-            target_directions[i] = 1 if ret > 0 else 0
+    valid_mask = (~np.isnan(future_closes)) & (current_closes > 0)
+    future_returns = np.full(len(df), np.nan)
+    target_directions = np.full(len(df), np.nan)
+
+    future_returns[valid_mask] = (future_closes[valid_mask] - current_closes[valid_mask]) / current_closes[valid_mask]
+    target_directions[valid_mask] = np.where(future_returns[valid_mask] > 0, 1.0, 0.0)
 
     df["future_return"] = future_returns
     df["target_direction"] = target_directions

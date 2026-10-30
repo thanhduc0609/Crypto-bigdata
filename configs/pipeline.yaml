@@ -30,7 +30,7 @@ streaming:
   whale_threshold_usd: 500000.0
 
 storage:
-  destination: "s3" # Options: s3, local, hdfs
+  destination: "s3" # Options: s3, local
   s3:
     bucket_env_var: "S3_BUCKET_NAME"
     region_env_var: "AWS_REGION"

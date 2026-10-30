@@ -22,6 +22,7 @@ Pipeline thu thập, xử lý và phân tích dữ liệu giao dịch Cryptocurr
    - [6.9. Truy vấn Serverless SQL với Amazon Athena](#69-truy-vấn-serverless-sql-với-amazon-athena)
 7. [Các chỉ số tài chính & Dòng tiền được tính toán](#-7-các-chỉ-số-tài-chính--dòng-tiền-được-tính-toán)
 8. [Xử lý sự cố thường gặp (Troubleshooting)](#-8-xử-lý-sự-cố-thường-gặp-troubleshooting)
+9. [Kiểm thử chất lượng mã nguồn & Dữ liệu (Automated Testing)](#-9-kiểm-thử-chất-lượng-mã-nguồn--dữ-liệu-automated-testing)
 
 ---
 
@@ -137,16 +138,24 @@ crypto-bigdata/
 ├── .env                      # File cấu hình biến môi trường (AWS Keys, S3, Kafka, Postgres)
 ├── .gitignore                # Danh sách file và thư mục loại trừ khỏi Git
 ├── docker-compose.yml        # Docker Compose chạy Kafka (9092) & PostgreSQL (5433)
+├── pyproject.toml            # Cấu hình dự án & dependencies chuẩn PEP 621
 ├── requirements.txt          # Danh sách thư viện Python chuẩn hóa
 ├── README.md                 # Tài liệu hướng dẫn toàn diện hệ thống
+│
+├── docs/                     # TÀI LIỆU CHI TIẾT DỰ ÁN VÀ BÁO CÁO KIỂM TOÁN
+│   ├── audit_report.md       # Báo cáo kiểm định toàn diện chất lượng kiến trúc & dữ liệu
+│   ├── README_REPORT.md      # Báo cáo chuyên sâu kiến trúc Streaming, Lakehouse & DW
+│   └── ANALYSIS_ROADMAP.md   # Lộ trình phân tích định lượng & định hướng mở rộng
 │
 ├── configs/                  # FILE CẤU HÌNH PIPELINE & MACHINE LEARNING
 │   ├── pipeline.yaml         # Cấu hình Ingestion, Kafka, Storage (Bronze/Silver/Gold)
 │   └── ml.yaml               # Cấu hình XGBoost (Horizon 5m, Hyperparameters, Features)
 │
-├── ingestion/                # TẦNG THU THẬP DỮ LIỆU STREAMING
-│   └── streaming/
-│       └── okx_producer.py   # Thu thập OKX WebSocket (BTC-USDT) đẩy vào Kafka topic
+├── ingestion/                # TẦNG THU THẬP DỮ LIỆU STREAMING & HISTORICAL
+│   ├── streaming/
+│   │   └── okx_producer.py   # Thu thập OKX WebSocket (BTC-USDT) đẩy vào Kafka topic
+│   └── historical/
+│       └── okx_historical_backfill.py # Tải 90 ngày nến lịch sử từ OKX REST API
 │
 ├── processing/               # TẦNG XỬ LÝ PHÂN TÁN VÀ ĐỊNH LƯỢNG
 │   ├── core/
@@ -177,7 +186,8 @@ crypto-bigdata/
 │
 ├── warehouse/                # TẦNG DATA WAREHOUSE (POSTGRESQL STAR SCHEMA)
 │   ├── sql/
-│   │   ├── dim/              # dim_symbol.sql, dim_alert_tier.sql
+│   │   ├── 00_init_streaming_dw.sql # Script DDL & Idempotent Migrations
+│   │   ├── dim/              # dim_symbol.sql (BTC-USDT), dim_alert_tier.sql
 │   │   ├── fact/             # fact_crypto_trades.sql, fact_crypto_1m_candles.sql,
 │   │   │                     # fact_btc_predictions.sql, fact_btc_model_evaluation.sql
 │   │   └── views/            # 10 Analytics Materialized/Streaming Views
@@ -195,17 +205,18 @@ crypto-bigdata/
 │   ├── setup_env.sh          # Script cấu hình Bash (Linux/Mac/WSL)
 │   ├── run_ingestion.py      # Chạy Ingestion WebSocket OKX -> Kafka
 │   ├── run_streaming.py      # Chạy PySpark Structured Streaming Engine
+│   ├── run_backfill.py       # Chạy Backfill nến lịch sử từ OKX REST API
 │   ├── build_features.py     # Tạo đặc trưng kỹ thuật & tập dữ liệu phân đoạn
 │   ├── train_model.py        # Huấn luyện và xuất artifacts mô hình XGBoost
 │   └── run_prediction.py     # Chạy vòng lặp suy luận dự báo thời gian thực
 │
 ├── tests/                    # KIỂM THỬ TỰ ĐỘNG & BENCHMARK
+│   ├── test_audit_remediation.py # Bộ kiểm thử độc lập 10 tiêu chí kiểm toán (Offline Fixtures)
 │   ├── test_pipeline_e2e.py  # Bộ kiểm thử tích hợp toàn diện 7/7 bài test
 │   ├── test_warehouse.py     # Kiểm tra PostgreSQL Star Schema & độ trễ
 │   └── test_s3.py            # Kiểm tra kết nối AWS S3 Data Lake
 │
 ├── hadoop/                   # Thư viện winutils.exe & hadoop.dll cho môi trường Windows
-├── pyproject.toml            # Cấu hình dự án & dependencies chuẩn PEP 621
 ├── requirements.txt          # Danh sách thư viện Python chuẩn hóa
 └── data/                     # Checkpoints cục bộ, Lakehouse data và file xuất CSV
 ```
@@ -363,11 +374,13 @@ Công cụ tương tác chuyên biệt giúp bạn kiểm tra các file Parquet 
 
 Hệ thống Data Warehouse được tinh giản và tối ưu hóa chuyên biệt cho **Pure Real-Time Streaming** theo mô hình **Star Schema**:
 - **Bảng Chiều (Dimensions)**:
-  - `dim_symbol`: Quản lý danh mục coin, topic Kafka, partition mapping (`BTC` -> 0, `ETH` -> 1, `SOL` -> 2), ngưỡng cảnh báo cá mập và độ chính xác giá.
+  - `dim_symbol`: Quản lý danh mục coin chuyên biệt `BTC-USDT` (partition 0), topic Kafka `crypto-trades`, ngưỡng lọc cá mập và độ chính xác giá.
   - `dim_alert_tier`: Danh mục phân cấp độ cảnh báo cá mập (`Mega Whale >= $500K`, `Big Whale $100K - $500K`, `Whale $50K - $100K`, `Large Order $10K - $50K`).
 - **Bảng Sự Kiện (Fact Tables)**:
   - `fact_crypto_trades`: Lưu trữ các giao dịch lớn/cá mập streaming $\ge \$10,000$ kèm metadata độ trễ (`kafka_arrival_time`, `streaming_latency_sec`).
-  - `fact_crypto_1m_candles`: Lưu trữ nến 1 phút sinh ra liên tục từ micro-batch của Spark Streaming (OHLC, VWAP, Trade Imbalance, Buy/Sell Volumes).
+  - `fact_crypto_1m_candles`: Lưu trữ nến 1 phút sinh ra liên tục từ micro-batch của Spark Streaming (OHLC, VWAP, Trade Imbalance, Buy/Sell Volumes, `source`, `is_closed`).
+  - `fact_btc_predictions`: Lưu trữ kết quả suy luận dự báo xu hướng giá 5 phút từ XGBoost model (`direction_label`, `probability_up`, `features_json`, `actual_outcome_direction`).
+  - `fact_btc_model_evaluation`: Lưu trữ telemetry đánh giá mô hình định kỳ (Accuracy, Precision, Recall, F1, Baseline Lift).
 - **10 Views Phân Tích Streaming Tốc Độ Cao (Speed Layer Views)**:
   1. `vw_whale_trades`: Radar giao dịch cá mập theo phân cấp và độ trễ streaming.
   2. `vw_rolling_5m_metrics`: Cửa sổ trượt 5 phút phát hiện đà bứt phá (Momentum) & tín hiệu Scalping.
@@ -400,7 +413,7 @@ Nền tảng Web Dashboard chuyên nghiệp phát triển trên nền **Flask Ba
 - 📊 **Tab 1 - Terminal Giao Dịch & Định Lượng**:
   - Biểu đồ nến TradingView thời gian thực mượt mà với đường giá trung bình gia quyền (**VWAP**) và Volume.
   - Thước đo cân bằng áp lực Mua / Bán (**Order Flow Imbalance Gauge**).
-  - Tín hiệu lướt sóng Scalping & Cảnh báo Cá mập thời gian thực cho BTC, ETH, SOL.
+  - Tín hiệu lướt sóng Scalping & Cảnh báo Cá mập thời gian thực cho BTC-USDT.
 - 🏛 **Tab 2 - Kho Dữ Liệu DW (Data Warehouse Explorer)**:
   - Xem dữ liệu bảng và view trong PostgreSQL (`fact_crypto_trades`, `fact_crypto_1m_candles`, `vw_whale_trades`,...).
   - Bộ lọc theo Symbol và phân trang linh hoạt.
@@ -433,10 +446,11 @@ Hệ thống tích hợp một mô hình học máy duy nhất: **XGBoost Classi
   * Phân chia thời gian tuần tự (Chronological split): **70% Train**, **15% Validation**, **15% Test**.
   * Tuyệt đối không xáo trộn ngẫu nhiên (No random shuffle).
   * Vùng đệm cách ly (Embargo buffer) **5 phút** giữa các tập để loại trừ rò rỉ thông tin tương lai (Data Leakage).
-* **Bộ 18 đặc trưng vi mô & chỉ báo kỹ thuật**:
-  * Giá: `log_return`, `price_momentum_5m`, `high_low_range`
+* **Bộ 15 đặc trưng chuẩn hóa (Canonical Feature Vector)**:
+  * Giá & Đà tăng trưởng: `log_return`, `price_momentum_5m`, `high_low_range`
   * Khối lượng & Dòng tiền: `volume_change`, `buy_sell_ratio`, `trade_imbalance`, `vwap_deviation`
-  * Kỹ thuật: `sma_5`, `sma_15`, `ema_12`, `ema_26`, `macd`, `macd_signal`, `bb_upper`, `bb_lower`, `bb_bandwidth`, `rsi_14`, `rolling_volatility_15m`
+  * Chỉ báo kỹ thuật xu hướng: `sma_5`, `sma_15`, `ema_12`, `ema_26`, `macd`, `macd_signal`, `rsi_14`, `rolling_volatility_15m`
+  *(Được đồng bộ chính xác 100% giữa configs/ml.yaml, ml/artifacts/feature_schema.json và code suy luận).*
 
 #### Các lệnh vận hành tầng Machine Learning:
 
@@ -456,9 +470,9 @@ python scripts/run_prediction.py --once
 ```
 
 #### Các tệp Artifacts sinh ra trong `ml/artifacts/`:
-* `btc_xgboost_model.json`: Trọng số mô hình XGBoost chuẩn hóa.
-* `feature_schema.json`: Danh sách và thứ tự 18 đặc trưng đầu vào.
-* `model_metadata.json`: Phiên bản, tham số huấn luyện, khoảng thời gian dữ liệu.
+* `btc_xgboost_model.json`: Trọng số mô hình XGBoost chuẩn hóa (phiên bản 2.0.0).
+* `feature_schema.json`: Danh sách và thứ tự 15 đặc trưng đầu vào chuẩn hóa.
+* `model_metadata.json`: Phiên bản `2.0.0`, tham số huấn luyện, khoảng thời gian dữ liệu.
 * `evaluation_results.json`: Độ chính xác, ma trận nhầm lẫn (Confusion Matrix) và so sánh với Majority Baseline.
 
 ---
@@ -587,3 +601,33 @@ Engine Spark Structured Streaming liên tục tổng hợp các chỉ số theo 
 ### 4. S3 Bucket vừa tạo bị trống hoặc báo lỗi Path NotFound
 - **Hiện tượng**: S3 chưa có thư mục nào sau khi tạo bucket rỗng trên AWS.
 - **Giải pháp**: Chạy lệnh `.\scripts\setup_env.ps1 -InitS3` hoặc `python tests/test_s3.py`. Script sẽ tự động tạo toàn bộ cấu trúc thư mục phân vùng và ghi dữ liệu mẫu chuẩn lên S3.
+
+---
+
+## 🧪 9. Kiểm thử chất lượng mã nguồn & Dữ liệu (Automated Testing)
+
+Dự án cung cấp bộ kiểm thử tự động toàn diện giúp giảng viên và kỹ sư đối soát nhanh tính đúng đắn logic của mã nguồn mà không phát sinh chi phí Cloud hay yêu cầu cụm Kafka/PostgreSQL bên ngoài:
+
+### 1. Bộ kiểm thử kiểm toán độc lập (Offline Synthetic Fixtures - 100% Khuyến nghị)
+Bộ kiểm thử `tests/test_audit_remediation.py` chạy hoàn toàn offline bằng dữ liệu giả lập (Synthetic Fixtures), xác thực 10 tiêu chí kỹ thuật trọng yếu:
+1. **Producer Callback**: Producer callback xử lý gửi tin nhắn bất đồng bộ, sử dụng đúng instance (không bị `None`).
+2. **BTC-USDT Isolation**: Khước từ tuyệt đối các cặp giao dịch lạ (ETH, SOL) và lọc bỏ dữ liệu NaN, Infinity, giá $\le 0$.
+3. **Timestamp Precision**: Bảo toàn độ chính xác mili-giây và chuẩn hóa múi giờ UTC.
+4. **Deterministic Tie-Break**: Xác định chính xác Open/Close khi có nhiều giao dịch cùng timestamp bằng cách so sánh `(raw_timestamp, trade_id)`.
+5. **Idempotent Partition Replay**: Kiểm tra cơ chế chống ghi trùng khi chạy lại dữ liệu trên Medallion Lakehouse.
+6. **REST Data Reconciliation**: Dữ liệu REST lịch sử giữ nguyên `NULL` cho các trường vi mô (`buy_volume`, `sell_volume`, `trade_count`), không tạo số liệu giả.
+7. **Whale Tier Alignment**: Ngưỡng lưu trữ giao dịch lớn từ $\$10,000$ USD với cảnh báo console tại $\ge \$500,000$.
+8. **Schema Synchronization**: Kiểm tra sự hiện diện của các cột `source`, `is_closed` và bảng `fact_btc_predictions`, `fact_btc_model_evaluation`.
+9. **ML Feature Alignment**: Đối chiếu vector 15 đặc trưng chuẩn hóa khớp 100% giữa config, feature_schema và model artifact.
+10. **Target Formulation**: Xác thực công thức nhãn $+5\text{m}$ dựa trên mốc thời gian thực tế, không mặc định 5 dòng liên tiếp.
+
+```powershell
+# Chạy bộ kiểm thử kiểm toán:
+.\.venv\Scripts\python.exe tests/test_audit_remediation.py
+```
+> Kết quả mong đợi: **`10/10 PASS (100%)`**.
+
+### 2. Các bài test tích hợp môi trường (Yêu cầu Docker / S3)
+* `.\scripts\setup_env.ps1 -TestWarehouse` (hoặc `python tests/test_warehouse.py`): Kiểm tra kết nối và độ trễ truy vấn Star Schema trên PostgreSQL.
+* `.\scripts\setup_env.ps1 -TestPipeline` (hoặc `python tests/test_pipeline_e2e.py`): Kiểm tra tích hợp End-to-End toàn bộ pipeline.
+* `.\scripts\setup_env.ps1 -TestS3` (hoặc `python tests/test_s3.py`): Kiểm tra quyền đọc/ghi phân vùng Parquet trên AWS S3.

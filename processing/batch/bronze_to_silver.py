@@ -93,7 +93,7 @@ def process_bronze_to_silver(
     # 2. Standardization & Deduplication
     cleaned_df = (
         valid_df
-        .withColumn("trade_time", to_timestamp(from_unixtime(col("raw_timestamp") / 1000)))
+        .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))
         .withColumn("trade_value", col("price") * col("size"))
         .withColumn("trade_date", date_format(col("trade_time"), "yyyy-MM-dd"))
         .dropDuplicates(["trade_id"])
@@ -101,10 +101,11 @@ def process_bronze_to_silver(
 
     valid_count = cleaned_df.count()
 
-    # 3. Write to Silver Parquet
+    # 3. Write to Silver Parquet with Dynamic Partition Overwrite (idempotent; only touched partitions replaced)
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
     (
         cleaned_df.write
-        .mode("append")
+        .mode("overwrite")
         .partitionBy("symbol", "trade_date")
         .parquet(silver_path)
     )

@@ -24,11 +24,20 @@ CREATE TABLE IF NOT EXISTS fact_crypto_1m_candles (
     trade_imbalance NUMERIC(10, 4) DEFAULT 0,
     total_trade_value NUMERIC(24, 4),
     source VARCHAR(32) DEFAULT 'realtime_stream',
+    is_closed BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (symbol, window_start)
 );
+
+-- Safe migrations for schema evolution without DROP/TRUNCATE
+ALTER TABLE fact_crypto_1m_candles ADD COLUMN IF NOT EXISTS source VARCHAR(32) DEFAULT 'realtime_stream';
+ALTER TABLE fact_crypto_1m_candles ADD COLUMN IF NOT EXISTS is_closed BOOLEAN DEFAULT TRUE;
+ALTER TABLE fact_crypto_1m_candles ALTER COLUMN trade_count DROP NOT NULL;
+ALTER TABLE fact_crypto_1m_candles ALTER COLUMN vwap DROP NOT NULL;
+ALTER TABLE fact_crypto_1m_candles ALTER COLUMN total_trade_value DROP NOT NULL;
 
 -- Indexes for Fast Streaming Lookups & Time-series Queries
 CREATE INDEX IF NOT EXISTS idx_fact_1m_symbol_window ON fact_crypto_1m_candles (symbol, window_start DESC);
 CREATE INDEX IF NOT EXISTS idx_fact_1m_window_start ON fact_crypto_1m_candles (window_start DESC);
 CREATE INDEX IF NOT EXISTS idx_fact_1m_symbol_created ON fact_crypto_1m_candles (symbol, created_at DESC);
+

@@ -56,9 +56,7 @@ ALTER TABLE warehouse.dim_symbol ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP W
 
 INSERT INTO warehouse.dim_symbol (symbol, base_asset, quote_asset, exchange, kafka_topic, kafka_partition, whale_threshold_usd, price_precision, volume_precision, is_active)
 VALUES 
-    ('BTC-USDT', 'BTC', 'USDT', 'OKX', 'crypto-trades', 0, 500000.00, 2, 4, TRUE),
-    ('ETH-USDT', 'ETH', 'USDT', 'OKX', 'crypto-trades', 1, 500000.00, 2, 4, FALSE),
-    ('SOL-USDT', 'SOL', 'USDT', 'OKX', 'crypto-trades', 2, 500000.00, 2, 4, FALSE)
+    ('BTC-USDT', 'BTC', 'USDT', 'OKX', 'crypto-trades', 0, 500000.00, 2, 4, TRUE)
 ON CONFLICT (symbol) DO UPDATE SET
     kafka_topic = EXCLUDED.kafka_topic,
     kafka_partition = EXCLUDED.kafka_partition,
@@ -146,15 +144,24 @@ CREATE TABLE IF NOT EXISTS warehouse.fact_crypto_1m_candles (
     low NUMERIC(18, 8) NOT NULL,
     close NUMERIC(18, 8) NOT NULL,
     volume NUMERIC(24, 8) NOT NULL,
-    trade_count BIGINT NOT NULL,
+    trade_count BIGINT,
     buy_volume NUMERIC(24, 8) DEFAULT 0,
     sell_volume NUMERIC(24, 8) DEFAULT 0,
-    vwap NUMERIC(18, 8) NOT NULL,
+    vwap NUMERIC(18, 8),
     trade_imbalance NUMERIC(10, 4) DEFAULT 0,
-    total_trade_value NUMERIC(24, 4) NOT NULL,
+    total_trade_value NUMERIC(24, 4),
+    source VARCHAR(32) DEFAULT 'realtime_stream',
+    is_closed BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (symbol, window_start)
 );
+
+-- Safe migrations for existing table schema evolution
+ALTER TABLE warehouse.fact_crypto_1m_candles ADD COLUMN IF NOT EXISTS source VARCHAR(32) DEFAULT 'realtime_stream';
+ALTER TABLE warehouse.fact_crypto_1m_candles ADD COLUMN IF NOT EXISTS is_closed BOOLEAN DEFAULT TRUE;
+ALTER TABLE warehouse.fact_crypto_1m_candles ALTER COLUMN trade_count DROP NOT NULL;
+ALTER TABLE warehouse.fact_crypto_1m_candles ALTER COLUMN vwap DROP NOT NULL;
+ALTER TABLE warehouse.fact_crypto_1m_candles ALTER COLUMN total_trade_value DROP NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_fact_1m_symbol_window ON warehouse.fact_crypto_1m_candles (symbol, window_start DESC);
 CREATE INDEX IF NOT EXISTS idx_fact_1m_window_start ON warehouse.fact_crypto_1m_candles (window_start DESC);
@@ -430,3 +437,53 @@ SELECT
 FROM warehouse.fact_crypto_1m_candles
 GROUP BY symbol, date_trunc('year', window_start)::date
 ORDER BY year_start_date DESC, symbol;
+
+-- -----------------------------------------------------------------------------
+-- 6. FACT TABLE: fact_btc_predictions (XGBoost Real-Time Inference Sink)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS warehouse.fact_btc_predictions (
+    prediction_id BIGSERIAL PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL DEFAULT 'BTC-USDT',
+    feature_timestamp TIMESTAMPTZ NOT NULL,
+    prediction_timestamp TIMESTAMPTZ NOT NULL,
+    target_timestamp TIMESTAMPTZ NOT NULL,
+    predicted_direction INTEGER NOT NULL, -- 1: UP, 0: NOT_UP
+    probability_up DOUBLE PRECISION NOT NULL,
+    probability_not_up DOUBLE PRECISION NOT NULL,
+    model_version VARCHAR(50) NOT NULL,
+    model_name VARCHAR(100) NOT NULL DEFAULT 'btc_xgboost_direction',
+    current_price DOUBLE PRECISION,
+    horizon_minutes INTEGER NOT NULL DEFAULT 5,
+    actual_direction INTEGER,
+    actual_future_price DOUBLE PRECISION,
+    is_correct BOOLEAN,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_btc_prediction UNIQUE (symbol, feature_timestamp, model_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_btc_pred_feature_ts ON warehouse.fact_btc_predictions (feature_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_btc_pred_target_ts ON warehouse.fact_btc_predictions (target_timestamp DESC);
+
+-- -----------------------------------------------------------------------------
+-- 7. FACT TABLE: fact_btc_model_evaluation (Model Benchmark & Evaluation Archive)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS warehouse.fact_btc_model_evaluation (
+    eval_id BIGSERIAL PRIMARY KEY,
+    model_name VARCHAR(100) NOT NULL,
+    model_version VARCHAR(50) NOT NULL,
+    evaluation_timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    target_symbol VARCHAR(20) NOT NULL DEFAULT 'BTC-USDT',
+    test_samples INTEGER NOT NULL,
+    accuracy DOUBLE PRECISION NOT NULL,
+    precision DOUBLE PRECISION NOT NULL,
+    recall DOUBLE PRECISION NOT NULL,
+    f1_score DOUBLE PRECISION NOT NULL,
+    balanced_accuracy DOUBLE PRECISION NOT NULL,
+    roc_auc DOUBLE PRECISION,
+    baseline_accuracy DOUBLE PRECISION NOT NULL,
+    accuracy_lift_pct DOUBLE PRECISION NOT NULL,
+    confusion_matrix JSONB,
+    feature_importance JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+

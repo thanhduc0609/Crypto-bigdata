@@ -93,7 +93,7 @@ def start_bronze_writer(
             col("kafka_arrival_time")
         )
         .filter(col("symbol") == target_symbol)
-        .withColumn("trade_time", to_timestamp(from_unixtime(col("raw_timestamp") / 1000)))
+        .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))
         .withColumn("trade_date", date_format(col("trade_time"), "yyyy-MM-dd"))
     )
 

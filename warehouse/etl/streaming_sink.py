@@ -90,6 +90,7 @@ def write_whales_batch(batch_df, batch_id):
         print(f"[!] Loi khi nap Ca map vao PostgreSQL: {e}")
         if conn:
             conn.rollback()
+        raise e
     finally:
         if conn:
             conn.close()
@@ -112,82 +113,22 @@ def write_candles_batch(batch_df, batch_id):
         upsert_sql = """
             INSERT INTO warehouse.fact_crypto_1m_candles 
             (symbol, window_start, window_end, open, high, low, close, volume, 
-             trade_count, buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             trade_count, buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (symbol, window_start) DO UPDATE SET
-                -- Safe deterministic merge: Never overwrite complete historical REST candle with partial streaming candle
-                open = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.open
-                    ELSE EXCLUDED.open
-                END,
-                high = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN GREATEST(warehouse.fact_crypto_1m_candles.high, EXCLUDED.high)
-                    ELSE EXCLUDED.high
-                END,
-                low = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN LEAST(warehouse.fact_crypto_1m_candles.low, EXCLUDED.low)
-                    ELSE EXCLUDED.low
-                END,
-                close = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.close
-                    ELSE EXCLUDED.close
-                END,
-                volume = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.volume
-                    ELSE EXCLUDED.volume
-                END,
-                trade_count = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN COALESCE(warehouse.fact_crypto_1m_candles.trade_count, EXCLUDED.trade_count)
-                    ELSE COALESCE(EXCLUDED.trade_count, warehouse.fact_crypto_1m_candles.trade_count)
-                END,
-                buy_volume = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.buy_volume
-                    ELSE EXCLUDED.buy_volume
-                END,
-                sell_volume = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.sell_volume
-                    ELSE EXCLUDED.sell_volume
-                END,
-                vwap = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.vwap
-                    ELSE EXCLUDED.vwap
-                END,
-                trade_imbalance = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.trade_imbalance
-                    ELSE EXCLUDED.trade_imbalance
-                END,
-                total_trade_value = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN warehouse.fact_crypto_1m_candles.total_trade_value
-                    ELSE COALESCE(EXCLUDED.total_trade_value, warehouse.fact_crypto_1m_candles.total_trade_value)
-                END,
-                source = CASE
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest'
-                         AND EXCLUDED.volume < warehouse.fact_crypto_1m_candles.volume
-                    THEN 'historical_rest'
-                    ELSE EXCLUDED.source
-                END;
+                open = EXCLUDED.open,
+                high = GREATEST(warehouse.fact_crypto_1m_candles.high, EXCLUDED.high),
+                low = LEAST(warehouse.fact_crypto_1m_candles.low, EXCLUDED.low),
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume,
+                trade_count = COALESCE(EXCLUDED.trade_count, warehouse.fact_crypto_1m_candles.trade_count),
+                buy_volume = COALESCE(EXCLUDED.buy_volume, warehouse.fact_crypto_1m_candles.buy_volume),
+                sell_volume = COALESCE(EXCLUDED.sell_volume, warehouse.fact_crypto_1m_candles.sell_volume),
+                vwap = COALESCE(EXCLUDED.vwap, warehouse.fact_crypto_1m_candles.vwap),
+                trade_imbalance = COALESCE(EXCLUDED.trade_imbalance, warehouse.fact_crypto_1m_candles.trade_imbalance),
+                total_trade_value = COALESCE(EXCLUDED.total_trade_value, warehouse.fact_crypto_1m_candles.total_trade_value),
+                source = EXCLUDED.source,
+                is_closed = EXCLUDED.is_closed;
         """
 
         records = [
@@ -206,7 +147,8 @@ def write_candles_batch(batch_df, batch_id):
                 float(r["vwap"]) if r["vwap"] is not None else None,
                 float(r["trade_imbalance"]) if r["trade_imbalance"] is not None else None,
                 float(r["total_trade_value"]) if r["total_trade_value"] is not None else None,
-                "realtime_stream"
+                r.asDict().get("source", "realtime_stream") if hasattr(r, "asDict") else "realtime_stream",
+                r.asDict().get("is_closed", True) if hasattr(r, "asDict") else True
             )
             for r in rows
         ]
@@ -219,6 +161,7 @@ def write_candles_batch(batch_df, batch_id):
         print(f"[!] Loi khi nap Nen 1m vao PostgreSQL: {e}")
         if conn:
             conn.rollback()
+        raise e
     finally:
         if conn:
             conn.close()
@@ -242,51 +185,57 @@ def write_historical_candles_batch(records: list) -> int:
         upsert_sql = """
             INSERT INTO warehouse.fact_crypto_1m_candles 
             (symbol, window_start, window_end, open, high, low, close, volume, 
-             trade_count, buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'historical_rest')
+             trade_count, buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'historical_rest', TRUE)
             ON CONFLICT (symbol, window_start) DO UPDATE SET
                 open = CASE
                     WHEN warehouse.fact_crypto_1m_candles.source = 'realtime_stream' 
-                         AND warehouse.fact_crypto_1m_candles.volume >= EXCLUDED.volume
+                         AND warehouse.fact_crypto_1m_candles.is_closed = TRUE
                     THEN warehouse.fact_crypto_1m_candles.open
                     ELSE EXCLUDED.open
                 END,
                 high = CASE
                     WHEN warehouse.fact_crypto_1m_candles.source = 'realtime_stream' 
-                         AND warehouse.fact_crypto_1m_candles.volume >= EXCLUDED.volume
-                    THEN warehouse.fact_crypto_1m_candles.high
+                         AND warehouse.fact_crypto_1m_candles.is_closed = TRUE
+                    THEN GREATEST(warehouse.fact_crypto_1m_candles.high, EXCLUDED.high)
                     ELSE EXCLUDED.high
                 END,
                 low = CASE
                     WHEN warehouse.fact_crypto_1m_candles.source = 'realtime_stream' 
-                         AND warehouse.fact_crypto_1m_candles.volume >= EXCLUDED.volume
-                    THEN warehouse.fact_crypto_1m_candles.low
+                         AND warehouse.fact_crypto_1m_candles.is_closed = TRUE
+                    THEN LEAST(warehouse.fact_crypto_1m_candles.low, EXCLUDED.low)
                     ELSE EXCLUDED.low
                 END,
                 close = CASE
                     WHEN warehouse.fact_crypto_1m_candles.source = 'realtime_stream' 
-                         AND warehouse.fact_crypto_1m_candles.volume >= EXCLUDED.volume
+                         AND warehouse.fact_crypto_1m_candles.is_closed = TRUE
                     THEN warehouse.fact_crypto_1m_candles.close
                     ELSE EXCLUDED.close
                 END,
                 volume = CASE
                     WHEN warehouse.fact_crypto_1m_candles.source = 'realtime_stream' 
-                         AND warehouse.fact_crypto_1m_candles.volume >= EXCLUDED.volume
+                         AND warehouse.fact_crypto_1m_candles.is_closed = TRUE
                     THEN warehouse.fact_crypto_1m_candles.volume
                     ELSE EXCLUDED.volume
                 END,
                 total_trade_value = CASE
                     WHEN warehouse.fact_crypto_1m_candles.source = 'realtime_stream' 
-                         AND warehouse.fact_crypto_1m_candles.volume >= EXCLUDED.volume
+                         AND warehouse.fact_crypto_1m_candles.is_closed = TRUE
                     THEN warehouse.fact_crypto_1m_candles.total_trade_value
                     ELSE COALESCE(EXCLUDED.total_trade_value, warehouse.fact_crypto_1m_candles.total_trade_value)
                 END,
+                trade_count = warehouse.fact_crypto_1m_candles.trade_count,
+                buy_volume = warehouse.fact_crypto_1m_candles.buy_volume,
+                sell_volume = warehouse.fact_crypto_1m_candles.sell_volume,
+                vwap = warehouse.fact_crypto_1m_candles.vwap,
+                trade_imbalance = warehouse.fact_crypto_1m_candles.trade_imbalance,
                 source = CASE
                     WHEN warehouse.fact_crypto_1m_candles.source = 'realtime_stream' 
-                         AND warehouse.fact_crypto_1m_candles.volume >= EXCLUDED.volume
+                         AND warehouse.fact_crypto_1m_candles.is_closed = TRUE
                     THEN 'realtime_stream'
                     ELSE 'historical_rest'
-                END;
+                END,
+                is_closed = TRUE;
         """
 
         formatted_records = [

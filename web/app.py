@@ -216,8 +216,8 @@ def api_overview():
                 "source": "live_okx"
             }
         else:
-            fallback_prices = {"BTC-USDT": 86500.0, "ETH-USDT": 2750.0, "SOL-USDT": 122.5}
-            p = fallback_prices.get(sym, 100.0)
+            fallback_prices = {"BTC-USDT": 86500.0}
+            p = fallback_prices.get(sym, 86500.0)
             results[sym] = {
                 "symbol": sym,
                 "price": p,
@@ -330,7 +330,7 @@ def api_candles():
     """
     Lấy danh sách nến OHLCV + VWAP + VWAP Bands + CVD cho TradingView Lightweight Charts
     Query params:
-      - symbol: BTC-USDT, ETH-USDT, SOL-USDT (default: BTC-USDT)
+      - symbol: BTC-USDT (default: BTC-USDT)
       - timeframe: 1m, 5m, 15m, 1h, 1d (default: 1m)
       - source: live (OKX REST API), dw (PostgreSQL DW), auto (default: live)
       - limit: số nến tối đa (default: 150)
@@ -559,7 +559,7 @@ def api_whales():
     """
     Lấy danh sách các giao dịch Cá mập (Whale Trades).
     Query params:
-      - symbol: BTC-USDT, ETH-USDT, SOL-USDT hoặc rỗng (all)
+      - symbol: BTC-USDT (default: BTC-USDT)
       - source: live (live OKX feed), dw (PostgreSQL historical archive), all
       - tier: mega, whale, large, all
       - limit: default 25
