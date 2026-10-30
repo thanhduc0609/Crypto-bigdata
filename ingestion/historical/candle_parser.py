@@ -20,7 +20,11 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
 
-def parse_okx_rest_candle(row: List[Any], symbol: str = "BTC-USDT") -> Optional[Dict[str, Any]]:
+def parse_okx_rest_candle(
+    row: List[Any],
+    symbol: str = "BTC-USDT",
+    require_closed: bool = False
+) -> Optional[Dict[str, Any]]:
     """
     Parses a single raw OKX 1m candle array into a canonical candle dictionary.
     Returns None if candle is incomplete, malformed, or invalid.
@@ -35,6 +39,10 @@ def parse_okx_rest_candle(row: List[Any], symbol: str = "BTC-USDT") -> Optional[
       [6] volCcy: Volume in base/contract currency
       [7] volCcyQuote: Volume in quote currency (USDT) -> total_trade_value
       [8] confirm: "1" = closed, "0" = unclosed
+
+    Contract:
+      - Sets is_closed=True strictly when confirm == "1", otherwise False.
+      - If require_closed=True, returns None immediately for unclosed candles.
     """
     if not isinstance(row, (list, tuple)) or len(row) < 9:
         return None
@@ -48,6 +56,8 @@ def parse_okx_rest_candle(row: List[Any], symbol: str = "BTC-USDT") -> Optional[
         # 2. Check confirmation: strictly "1" indicates a finalized closed candle
         confirm_str = str(row[8]).strip()
         is_closed = (confirm_str == "1")
+        if require_closed and not is_closed:
+            return None
 
         # 3. Parse OHLC prices
         open_p = float(row[1])
@@ -55,11 +65,12 @@ def parse_okx_rest_candle(row: List[Any], symbol: str = "BTC-USDT") -> Optional[
         low_p = float(row[3])
         close_p = float(row[4])
 
-        # Validate finite positive prices and valid high-low range
+        # Validate finite positive prices and valid candlestick geometry:
+        # 0 < low <= min(open, close) and max(open, close) <= high
         for p in (open_p, high_p, low_p, close_p):
             if not math.isfinite(p) or p <= 0:
                 return None
-        if high_p < low_p:
+        if not (0 < low_p <= min(open_p, close_p) and max(open_p, close_p) <= high_p):
             return None
 
         # 4. Volume in BTC (base currency)

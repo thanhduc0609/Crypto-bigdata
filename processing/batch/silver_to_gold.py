@@ -14,6 +14,7 @@ Saves output to Gold Parquet Lakehouse and PostgreSQL fact_crypto_1m_candles.
 import os
 import sys
 import time
+import uuid
 import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -74,11 +75,27 @@ def process_silver_to_gold(
     print(f"Gold Path   : {gold_path}")
     print("=" * 80)
 
-    try:
-        trades_df = spark.read.parquet(silver_path)
-    except Exception as e:
-        print(f"[!] Warning: Could not read Silver path ({e}). Returning empty result.")
-        return {"candles_count": 0, "status": "no_data"}
+    is_local = not silver_path.startswith("s3a://") and not silver_path.startswith("s3://")
+    if is_local:
+        local_s = Path(silver_path)
+        if not local_s.exists() or not any(local_s.rglob("*.parquet")):
+            print(f"[INFO] Silver path does not exist or has no parquet files ({silver_path}). Initial run.")
+            return {"candles_count": 0, "status": "no_data"}
+        try:
+            trades_df = spark.read.parquet(silver_path)
+        except Exception as read_err:
+            print(f"[!] Critical error reading Silver Parquet at {silver_path}: {read_err}")
+            raise read_err
+    else:
+        try:
+            trades_df = spark.read.parquet(silver_path)
+        except Exception as s3_err:
+            err_msg = str(s3_err).lower()
+            if "path does not exist" in err_msg or "nosuchkey" in err_msg:
+                print(f"[INFO] S3 Silver path does not exist yet ({silver_path}). Initial run.")
+                return {"candles_count": 0, "status": "no_data"}
+            print(f"[!] Critical error reading S3 Silver at {silver_path}: {s3_err}")
+            raise s3_err
 
     if symbol:
         trades_df = trades_df.filter(col("symbol") == symbol)
@@ -167,13 +184,25 @@ def process_silver_to_gold(
                 print(f"[!] Critical error reading S3 Gold at {gold_path}: {s3_err}")
                 raise s3_err
 
-    # 2. Deterministic Reconciliation: newly computed candles supersede existing candles for touched minutes;
-    # untouched historical minutes are preserved without loss.
+    # 2. Unified Canonical Reconciliation:
+    # Priority order:
+    #   a. Authoritative source: 'historical_rest' (score 2) strictly prioritized over 'realtime_stream' (score 1)
+    #   b. For same source: closed candles (is_closed=True) prioritized over unclosed
+    #   c. For streaming ties: higher trade_count / more complete order flow prioritized
+    #   d. Newly ingested batch (batch_priority=1) breaks remaining ties deterministically
+    # Untouched historical minutes are preserved without data loss.
     if existing_gold is not None:
+        source_score = (
+            when(col("source") == "historical_rest", lit(2))
+            .when(col("source") == "realtime_stream", lit(1))
+            .otherwise(lit(0))
+        )
         w = Window.partitionBy("symbol", "window_start").orderBy(
-            col("batch_priority").desc(),
+            source_score.desc(),
             col("is_closed").desc(),
-            col("trade_count").desc_nulls_last()
+            col("trade_count").desc_nulls_last(),
+            col("total_trade_value").desc_nulls_last(),
+            col("batch_priority").desc()
         )
         combined = (
             candles_df.withColumn("batch_priority", lit(1))
@@ -190,7 +219,8 @@ def process_silver_to_gold(
         final_gold = candles_df
 
     # 3. Safe Staging & Publish pattern (prevents reading and overwriting same path in single Spark lineage)
-    staging_path = f"{gold_path}_staging_{int(time.time())}"
+    unique_run_id = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+    staging_path = f"{gold_path}_staging_{unique_run_id}"
     (
         final_gold.write
         .mode("overwrite")
@@ -198,23 +228,62 @@ def process_silver_to_gold(
         .parquet(staging_path)
     )
 
+    # Verify staging materialized successfully before publishing
+    staging_verify = spark.read.parquet(staging_path)
+    if staging_verify.isEmpty():
+        raise IOError(f"Staging write produced empty dataset at {staging_path}; aborting Gold publish.")
+
     # Publish staging to target gold_path
     if is_local:
         target_dir = Path(gold_path)
         staging_dir = Path(staging_path)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        for item in staging_dir.iterdir():
-            dest = target_dir / item.name
-            if dest.exists():
-                if dest.is_dir():
-                    shutil.rmtree(dest)
+        backup_dir = Path(f"{gold_path}_backup_{unique_run_id}")
+        lock_file = target_dir.parent / ".gold_writer.lock"
+
+        # Check / acquire single writer lock
+        if lock_file.exists():
+            try:
+                if time.time() - lock_file.stat().st_mtime > 300:
+                    lock_file.unlink(missing_ok=True)
                 else:
-                    dest.unlink()
-            shutil.move(str(item), str(dest))
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
+                    raise RuntimeError(f"Concurrent Gold publish in progress (lock held at {lock_file}). Aborting.")
+            except OSError:
+                pass
+        try:
+            lock_file.touch(exist_ok=True)
+        except OSError:
+            pass
+
+        try:
+            # Backup current Gold before replacing if it exists
+            if target_dir.exists() and any(target_dir.iterdir()):
+                shutil.copytree(str(target_dir), str(backup_dir))
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for item in staging_dir.iterdir():
+                dest = target_dir / item.name
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                shutil.move(str(item), str(dest))
+        except Exception as pub_err:
+            print(f"[!] Error during Gold publish: {pub_err}. Rolling back from backup...")
+            if backup_dir.exists():
+                if target_dir.exists():
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.copytree(str(backup_dir), str(target_dir))
+            raise pub_err
+        finally:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            lock_file.unlink(missing_ok=True)
     else:
         # Note on AWS S3: Directory publishing is object-by-object eventual consistency, not an atomic filesystem rename.
+        # Staging verification guarantees all objects are completed before writing to canonical prefix.
         staging_df = spark.read.parquet(staging_path)
         staging_df.write.mode("overwrite").partitionBy("symbol").parquet(gold_path)
 

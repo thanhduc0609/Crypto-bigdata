@@ -31,6 +31,7 @@ from processing.core.config import get_ml_config
 from processing.features.feature_engineering import compute_features, FEATURE_COLUMNS
 from ml.dataset import fetch_historical_btc_candles
 from warehouse.etl.db_config import get_db_connection
+from warehouse.etl.streaming_sink import write_historical_candles_batch
 from ingestion.historical.candle_parser import parse_okx_rest_candle
 
 ml_cfg = get_ml_config()
@@ -137,44 +138,20 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
         if data and len(data) >= 26:
             records = []
             for row in data:
-                candle_dict = parse_okx_rest_candle(row, symbol="BTC-USDT")
-                # Strictly require valid, closed (confirm == "1") candles
-                if candle_dict is not None and candle_dict.get("is_closed") is True:
+                candle_dict = parse_okx_rest_candle(row, symbol="BTC-USDT", require_closed=True)
+                if candle_dict is not None:
                     records.append(candle_dict)
 
             if records:
-                # Sync to PostgreSQL DW if connection available
+                # Sync authoritative REST candles to PostgreSQL DW using shared function
                 try:
-                    conn = get_db_connection()
-                    cur = conn.cursor()
-                    insert_sql = """
-                        INSERT INTO warehouse.fact_crypto_1m_candles (
-                            symbol, window_start, window_end, open, high, low, close, volume, total_trade_value, source, is_closed
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (symbol, window_start) DO UPDATE SET
-                            close = EXCLUDED.close,
-                            high = EXCLUDED.high,
-                            low = EXCLUDED.low,
-                            volume = EXCLUDED.volume,
-                            total_trade_value = EXCLUDED.total_trade_value,
-                            is_closed = EXCLUDED.is_closed;
-                    """
-                    for r in records:
-                        cur.execute(insert_sql, (
-                            r["symbol"], r["window_start"], r["window_end"],
-                            r["open"], r["high"], r["low"], r["close"],
-                            r["volume"], r["total_trade_value"],
-                            r["source"], r["is_closed"]
-                        ))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
+                    write_historical_candles_batch(records)
+                    print(f"[PREDICT] Synchronized {len(records)} authoritative REST candles to PostgreSQL DW.")
                 except Exception as db_err:
-                    print(f"[PREDICT] Note syncing REST candles to DB: {db_err}")
+                    print(f"[PREDICT] Database sync failed ({db_err}). Proceeding with in-memory inference from REST.")
 
                 df_finalized = pd.DataFrame(records).sort_values("window_start").reset_index(drop=True)
-                print(f"[PREDICT] Synced {len(df_finalized)} finalized/closed candles from OKX REST.")
+                print(f"[PREDICT] Loaded {len(df_finalized)} finalized/closed candles from OKX REST for inference.")
                 return df_finalized
     except Exception as e:
         print(f"[PREDICT] Note: Live OKX REST fetch error ({e}).")

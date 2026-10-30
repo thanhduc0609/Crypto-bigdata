@@ -45,7 +45,6 @@ from processing.core.spark_session import create_spark_session, load_env_vars
 from storage.s3 import (
     get_storage_mode,
     get_s3_bucket,
-    get_bronze_trades_path,
     get_gold_candles_path,
     get_speed_candles_path,
     get_checkpoint_path
@@ -62,9 +61,8 @@ KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC_TRADES", os.getenv("KAFKA_TOPIC", "crypto-trades"))
 
 S3_BUCKET = get_s3_bucket()
-STORAGE_DESTINATION = get_storage_mode()
-
-S3_RAW_PATH = get_bronze_trades_path(TARGET_SYMBOL)
+# Canonical Medallion Bronze Lakehouse is strictly owned and written by bronze_writer.py.
+# Speed layer only writes auxiliary real-time candles to S3_SPEED_PATH.
 S3_SPEED_PATH = get_speed_candles_path(TARGET_SYMBOL)
 
 # Checkpoint Configuration (defaults to local for zero latency on Windows)
@@ -73,11 +71,9 @@ checkpoint_base = project_root / "data" / "checkpoints"
 checkpoint_base.mkdir(parents=True, exist_ok=True)
 
 if USE_S3_CHECKPOINTS and STORAGE_DESTINATION == "s3":
-    CHECKPOINT_RAW = f"s3a://{S3_BUCKET}/checkpoints/trades_raw"
-    CHECKPOINT_PROCESSED = f"s3a://{S3_BUCKET}/checkpoints/trades_1m"
+    CHECKPOINT_PROCESSED = f"s3a://{S3_BUCKET}/checkpoints/speed_candles_1m"
 else:
-    CHECKPOINT_RAW = str(checkpoint_base / "trades_raw").replace("\\", "/")
-    CHECKPOINT_PROCESSED = str(checkpoint_base / "trades_1m").replace("\\", "/")
+    CHECKPOINT_PROCESSED = str(checkpoint_base / "speed_candles_1m").replace("\\", "/")
 
 CHECKPOINT_WHALE = str(checkpoint_base / "whale_alerts").replace("\\", "/")
 CHECKPOINT_DW_WHALES = str(checkpoint_base / "dw_whales").replace("\\", "/")
@@ -272,21 +268,9 @@ def process_crypto_streams(spark: SparkSession):
         )
         queries.append(dw_candles_query)
 
-    # OUTPUT: S3 / Local Parquet Lakehouse Sink
+    # OUTPUT: S3 / Local Parquet Auxiliary Speed Layer Sink
+    # (Note: Canonical Bronze is strictly written by bronze_writer.py; speed layer only writes speed candles)
     if STORAGE_DESTINATION in ["s3", "local"]:
-        print(f"[OUTPUT] Writing Raw Cleaned Stream -> Lakehouse: {S3_RAW_PATH}")
-        raw_s3_query = (
-            cleaned_trades_stream.writeStream
-            .format("parquet")
-            .outputMode("append")
-            .option("path", S3_RAW_PATH)
-            .option("checkpointLocation", CHECKPOINT_RAW)
-            .partitionBy("symbol", "trade_date")
-            .trigger(processingTime=TRIGGER_INTERVAL)
-            .start()
-        )
-        queries.append(raw_s3_query)
-
         print(f"[OUTPUT] Writing Auxiliary Speed Layer 1m Stream -> Lakehouse: {S3_SPEED_PATH}")
         processed_s3_query = (
             agg_1m_stream.writeStream

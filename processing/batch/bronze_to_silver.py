@@ -65,11 +65,27 @@ def process_bronze_to_silver(
     print(f"Silver Path : {silver_path}")
     print("=" * 80)
 
-    try:
-        raw_df = spark.read.parquet(bronze_path)
-    except Exception as e:
-        print(f"[!] Warning: Could not read Bronze path ({e}). Returning empty result.")
-        return {"total": 0, "valid": 0, "rejected": 0, "status": "no_data"}
+    is_local = not bronze_path.startswith("s3a://") and not bronze_path.startswith("s3://")
+    if is_local:
+        local_p = Path(bronze_path)
+        if not local_p.exists() or not any(local_p.rglob("*.parquet")):
+            print(f"[INFO] Bronze path does not exist or has no parquet files ({bronze_path}). Initial run.")
+            return {"total": 0, "valid": 0, "rejected": 0, "status": "no_data"}
+        try:
+            raw_df = spark.read.parquet(bronze_path)
+        except Exception as read_err:
+            print(f"[!] Critical error reading Bronze Parquet at {bronze_path}: {read_err}")
+            raise read_err
+    else:
+        try:
+            raw_df = spark.read.parquet(bronze_path)
+        except Exception as s3_err:
+            err_msg = str(s3_err).lower()
+            if "path does not exist" in err_msg or "nosuchkey" in err_msg:
+                print(f"[INFO] S3 Bronze path does not exist yet ({bronze_path}). Initial run.")
+                return {"total": 0, "valid": 0, "rejected": 0, "status": "no_data"}
+            print(f"[!] Critical error reading S3 Bronze at {bronze_path}: {s3_err}")
+            raise s3_err
 
     if trade_date and "trade_date" in raw_df.columns:
         raw_df = raw_df.filter(col("trade_date") == trade_date)
