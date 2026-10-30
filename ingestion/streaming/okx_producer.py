@@ -9,6 +9,12 @@ import websocket
 from kafka import KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic, NewPartitions
 
+# Enable unbuffered stdout/stderr for instant real-time console streaming
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
 # Setup project root
 project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
@@ -96,7 +102,8 @@ def _on_send_success(record_metadata, symbol: str, side: str, price: float, size
         f"{symbol:<9} | "
         f"{side:<4} | "
         f"Price: {price:<10.2f} | "
-        f"Size: {size:<8.4f}"
+        f"Size: {size:<8.4f}",
+        flush=True
     )
 
 

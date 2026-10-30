@@ -14,13 +14,18 @@ project_root = Path(__file__).resolve().parent.parent.parent
 
 def ensure_java_and_hadoop():
     """Tự động kiểm tra và thiết lập HADOOP_HOME và JAVA_HOME"""
-    if "HADOOP_HOME" not in os.environ:
-        os.environ["HADOOP_HOME"] = r"C:\hadoop"
+    local_hadoop = project_root / "hadoop"
+    if local_hadoop.exists():
+        os.environ["HADOOP_HOME"] = str(local_hadoop)
+    elif "HADOOP_HOME" not in os.environ or not os.path.exists(os.environ.get("HADOOP_HOME", "")):
+        if os.path.exists(r"C:\hadoop"):
+            os.environ["HADOOP_HOME"] = r"C:\hadoop"
 
-    hadoop_home = os.environ.get("HADOOP_HOME", r"C:\hadoop")
-    hadoop_bin = os.path.join(hadoop_home, "bin")
-    if os.path.exists(hadoop_bin) and hadoop_bin not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = f"{hadoop_bin};" + os.environ.get("PATH", "")
+    hadoop_home = os.environ.get("HADOOP_HOME", "")
+    if hadoop_home and os.path.exists(hadoop_home):
+        hadoop_bin = os.path.join(hadoop_home, "bin")
+        if os.path.exists(hadoop_bin) and hadoop_bin not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{hadoop_bin};" + os.environ.get("PATH", "")
 
     current_java = os.environ.get("JAVA_HOME", "")
     if not current_java or not os.path.exists(current_java):

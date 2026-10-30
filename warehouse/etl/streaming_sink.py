@@ -3,13 +3,15 @@
 Crypto Big Data - Real-time Streaming PostgreSQL Sink (Data Mart Serving)
 =============================================================================
 Thực hiện ghi dữ liệu streaming nhẹ vào PostgreSQL Data Warehouse:
-  1. Ghi nến 1 phút (fact_crypto_1m_candles): ~3 dòng/phút, cập nhật upsert (ON CONFLICT).
+  1. Ghi nến 1 phút (fact_crypto_1m_candles): áp dụng quy tắc Canonical Reconciliation dùng chung.
   2. Ghi các giao dịch cá mập/lệnh lớn (fact_crypto_trades): Lưu lệnh >= $10,000 kèm telemetry độ trễ.
 =============================================================================
 """
 
 import sys
+import time
 from pathlib import Path
+from typing import Optional, List, Any, Union
 
 if sys.platform.startswith("win"):
     try:
@@ -36,22 +38,33 @@ def compute_whale_tier(val: float) -> str:
     return "Large Order ($10K - $50K)"
 
 
-def write_whales_batch(batch_df, batch_id):
+def write_whales_batch(batch_df, batch_id: int = 0, conn=None, table_name: str = "warehouse.fact_crypto_trades", close_conn: bool = True):
     """Ghi micro-batch lệnh cá mập vào warehouse.fact_crypto_trades kèm telemetry độ trễ"""
-    if batch_df.isEmpty():
-        return
+    if hasattr(batch_df, "isEmpty") and batch_df.isEmpty():
+        return 0
 
-    rows = batch_df.collect()
+    if hasattr(batch_df, "collect"):
+        rows = batch_df.collect()
+    elif isinstance(batch_df, list):
+        rows = batch_df
+    elif hasattr(batch_df, "to_dict"):
+        rows = batch_df.to_dict(orient="records")
+    else:
+        rows = list(batch_df)
+
     if not rows:
-        return
+        return 0
 
-    conn = None
+    local_conn = False
+    active_conn = conn
+    if active_conn is None:
+        active_conn = get_db_connection()
+        local_conn = True
+
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        insert_sql = """
-            INSERT INTO warehouse.fact_crypto_trades 
+        cur = active_conn.cursor()
+        insert_sql = f"""
+            INSERT INTO {table_name} 
             (trade_id, symbol, price, size, side, trade_value, trade_time, trade_date, kafka_partition, kafka_offset, kafka_arrival_time, whale_tier)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (trade_id) DO NOTHING;
@@ -59,23 +72,31 @@ def write_whales_batch(batch_df, batch_id):
 
         records = []
         for r in rows:
-            r_dict = r.asDict() if hasattr(r, "asDict") else {}
-            val = float(r["trade_value"])
+            r_dict = r if isinstance(r, dict) else (r.asDict() if hasattr(r, "asDict") else {})
+            val = float(r["trade_value"] if not isinstance(r, dict) else r_dict["trade_value"])
             tier = r_dict.get("whale_tier") or compute_whale_tier(val)
             arrival = r_dict.get("kafka_arrival_time")
 
             k_part = r_dict.get("kafka_partition")
             k_off = r_dict.get("kafka_offset")
 
+            trade_id = str(r["trade_id"] if not isinstance(r, dict) else r_dict["trade_id"])
+            symbol = str(r["symbol"] if not isinstance(r, dict) else r_dict["symbol"])
+            price = float(r["price"] if not isinstance(r, dict) else r_dict["price"])
+            size = float(r["size"] if not isinstance(r, dict) else r_dict["size"])
+            side = str(r["side"] if not isinstance(r, dict) else r_dict["side"])
+            trade_time = r["trade_time"] if not isinstance(r, dict) else r_dict["trade_time"]
+            trade_date = r["trade_date"] if not isinstance(r, dict) else r_dict["trade_date"]
+
             records.append((
-                str(r["trade_id"]),
-                str(r["symbol"]),
-                float(r["price"]),
-                float(r["size"]),
-                str(r["side"]),
+                trade_id,
+                symbol,
+                price,
+                size,
+                side,
                 val,
-                r["trade_time"],
-                r["trade_date"],
+                trade_time,
+                trade_date,
                 int(k_part) if k_part is not None else None,
                 int(k_off) if k_off is not None else None,
                 arrival,
@@ -83,213 +104,300 @@ def write_whales_batch(batch_df, batch_id):
             ))
 
         cur.executemany(insert_sql, records)
-        conn.commit()
+        active_conn.commit()
         cur.close()
-        print(f"[DW SINK] Da nap {len(records)} lenh ca map vao PostgreSQL (fact_crypto_trades)!")
+        print(f"[DW SINK] Da nap {len(records)} lenh ca map vao PostgreSQL ({table_name})!")
+        return len(records)
     except Exception as e:
         print(f"[!] Loi khi nap Ca map vao PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
+        if active_conn:
+            active_conn.rollback()
         raise e
     finally:
-        if conn:
-            conn.close()
+        if local_conn and close_conn and active_conn:
+            active_conn.close()
 
 
-def write_candles_batch(batch_df, batch_id):
-    """Ghi nến 1 phút vào warehouse.fact_crypto_1m_candles (~3 dòng/phút)"""
-    if batch_df.isEmpty():
-        return
-
-    rows = batch_df.collect()
-    if not rows:
-        return
-
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        upsert_sql = """
-            INSERT INTO warehouse.fact_crypto_1m_candles 
-            (symbol, window_start, window_end, open, high, low, close, volume, 
-             trade_count, buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (symbol, window_start) DO UPDATE SET
-                open = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.open
-                    ELSE EXCLUDED.open 
-                END,
-                high = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.high
-                    ELSE EXCLUDED.high 
-                END,
-                low = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.low
-                    ELSE EXCLUDED.low 
-                END,
-                close = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.close
-                    ELSE EXCLUDED.close 
-                END,
-                volume = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.volume
-                    ELSE EXCLUDED.volume 
-                END,
-                total_trade_value = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.total_trade_value
-                    ELSE EXCLUDED.total_trade_value 
-                END,
-                trade_count = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.trade_count
-                    ELSE EXCLUDED.trade_count 
-                END,
-                buy_volume = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.buy_volume
-                    ELSE EXCLUDED.buy_volume 
-                END,
-                sell_volume = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.sell_volume
-                    ELSE EXCLUDED.sell_volume 
-                END,
-                vwap = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.vwap
-                    ELSE EXCLUDED.vwap 
-                END,
-                trade_imbalance = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN warehouse.fact_crypto_1m_candles.trade_imbalance
-                    ELSE EXCLUDED.trade_imbalance 
-                END,
-                source = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN 'historical_rest'
-                    ELSE EXCLUDED.source 
-                END,
-                is_closed = CASE 
-                    WHEN warehouse.fact_crypto_1m_candles.source = 'historical_rest' 
-                    THEN TRUE
-                    WHEN warehouse.fact_crypto_1m_candles.is_closed = TRUE AND EXCLUDED.is_closed = FALSE
-                    THEN TRUE
-                    ELSE EXCLUDED.is_closed 
-                END;
-        """
-
-        records = [
-            (
-                str(r["symbol"]),
-                r["window_start"],
-                r["window_end"],
-                float(r["open"]),
-                float(r["high"]),
-                float(r["low"]),
-                float(r["close"]),
-                float(r["volume"]),
-                int(r["trade_count"]) if r["trade_count"] is not None else None,
-                float(r["buy_volume"]) if r["buy_volume"] is not None else None,
-                float(r["sell_volume"]) if r["sell_volume"] is not None else None,
-                float(r["vwap"]) if r["vwap"] is not None else None,
-                float(r["trade_imbalance"]) if r["trade_imbalance"] is not None else None,
-                float(r["total_trade_value"]) if r["total_trade_value"] is not None else None,
-                r.asDict().get("source", "realtime_stream") if hasattr(r, "asDict") else "realtime_stream",
-                r.asDict().get("is_closed", True) if hasattr(r, "asDict") else True
-            )
-            for r in rows
-        ]
-
-        cur.executemany(upsert_sql, records)
-        conn.commit()
-        cur.close()
-        print(f"[DW SINK] Da nap/cap nhat {len(records)} nen 1m vao PostgreSQL (fact_crypto_1m_candles)!")
-    except Exception as e:
-        print(f"[!] Loi khi nap Nen 1m vao PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
-        raise e
-    finally:
-        if conn:
-            conn.close()
-
-
-def write_historical_candles_batch(records: list) -> int:
+def build_upsert_candles_sql(table_name: str = "warehouse.fact_crypto_1m_candles") -> str:
     """
-    Persists historical 1m candles into warehouse.fact_crypto_1m_candles with source='historical_rest'.
-    Deterministic reconciliation rule:
-      - Historical REST candles represent authoritative exchange-confirmed ground truth.
-      - If existing record was 'realtime_stream', the official REST candle updates OHLCV, volume,
-        turnover, sets source='historical_rest' and is_closed=TRUE, and resets micro-orderflow fields
-        to NULL to avoid presenting partial streaming stats as full REST stats.
-      - Guarantees identical canonical outcome regardless of arrival order (REST -> stream vs stream -> REST).
+    Constructs the canonical reconciliation SQL upsert query for 1-minute candles.
+    Rules:
+      1. REST authoritative precedence:
+         - Existing 'historical_rest' row CANNOT be overwritten by incoming 'realtime_stream'.
+         - Incoming 'historical_rest' row OVERWRITES existing 'realtime_stream', updates OHLCV/turnover,
+           sets source='historical_rest', is_closed=TRUE, and resets micro-orderflow fields to NULL.
+      2. Same-source streaming precedence:
+         - A closed candle (is_closed=TRUE) CANNOT be demoted by an unclosed candle (is_closed=FALSE).
+         - For identical closure status, a record with strictly higher trade_count is preserved
+           over a degraded/partial stream.
+         - For equal trade_count (or REST updates), incoming record updates deterministically.
+    """
+    return f"""
+        INSERT INTO {table_name} 
+        (symbol, window_start, window_end, open, high, low, close, volume, 
+         trade_count, buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (symbol, window_start) DO UPDATE SET
+            open = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.open
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.open
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.open
+                ELSE EXCLUDED.open 
+            END,
+            high = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.high
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.high
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.high
+                ELSE EXCLUDED.high 
+            END,
+            low = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.low
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.low
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.low
+                ELSE EXCLUDED.low 
+            END,
+            close = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.close
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.close
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.close
+                ELSE EXCLUDED.close 
+            END,
+            volume = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.volume
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.volume
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.volume
+                ELSE EXCLUDED.volume 
+            END,
+            total_trade_value = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.total_trade_value
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.total_trade_value
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.total_trade_value
+                ELSE EXCLUDED.total_trade_value 
+            END,
+            trade_count = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.trade_count
+                WHEN EXCLUDED.source = 'historical_rest' THEN NULL
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.trade_count
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.trade_count
+                ELSE EXCLUDED.trade_count 
+            END,
+            buy_volume = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.buy_volume
+                WHEN EXCLUDED.source = 'historical_rest' THEN NULL
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.buy_volume
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.buy_volume
+                ELSE EXCLUDED.buy_volume 
+            END,
+            sell_volume = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.sell_volume
+                WHEN EXCLUDED.source = 'historical_rest' THEN NULL
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.sell_volume
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.sell_volume
+                ELSE EXCLUDED.sell_volume 
+            END,
+            vwap = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.vwap
+                WHEN EXCLUDED.source = 'historical_rest' THEN NULL
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.vwap
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.vwap
+                ELSE EXCLUDED.vwap 
+            END,
+            trade_imbalance = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.trade_imbalance
+                WHEN EXCLUDED.source = 'historical_rest' THEN NULL
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.trade_imbalance
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.trade_imbalance
+                ELSE EXCLUDED.trade_imbalance 
+            END,
+            source = CASE 
+                WHEN {table_name}.source = 'historical_rest' AND EXCLUDED.source <> 'historical_rest' THEN {table_name}.source
+                WHEN EXCLUDED.source = 'historical_rest' THEN 'historical_rest'
+                WHEN {table_name}.source = EXCLUDED.source AND {table_name}.is_closed = TRUE AND EXCLUDED.is_closed = FALSE THEN {table_name}.source
+                WHEN {table_name}.source = 'realtime_stream' AND EXCLUDED.source = 'realtime_stream' 
+                     AND {table_name}.is_closed = EXCLUDED.is_closed 
+                     AND COALESCE({table_name}.trade_count, 0) > COALESCE(EXCLUDED.trade_count, 0) THEN {table_name}.source
+                ELSE EXCLUDED.source 
+            END,
+            is_closed = CASE 
+                WHEN {table_name}.source = 'historical_rest' THEN TRUE
+                WHEN EXCLUDED.source = 'historical_rest' THEN TRUE
+                WHEN {table_name}.is_closed = TRUE THEN TRUE
+                ELSE EXCLUDED.is_closed 
+            END;
+    """
+
+
+def _normalize_candle_records(rows) -> list:
+    """Normalizes heterogenous rows (dict, Spark Row, pandas row) into standard 16-tuple for SQL upsert."""
+    records = []
+    for r in rows:
+        if isinstance(r, dict):
+            symbol = str(r["symbol"])
+            w_start = r["window_start"]
+            w_end = r["window_end"]
+            open_p = float(r["open"])
+            high_p = float(r["high"])
+            low_p = float(r["low"])
+            close_p = float(r["close"])
+            vol = float(r["volume"])
+            tc = int(r["trade_count"]) if r.get("trade_count") is not None else None
+            bv = float(r["buy_volume"]) if r.get("buy_volume") is not None else None
+            sv = float(r["sell_volume"]) if r.get("sell_volume") is not None else None
+            vw = float(r["vwap"]) if r.get("vwap") is not None else None
+            ti = float(r["trade_imbalance"]) if r.get("trade_imbalance") is not None else None
+            tv = float(r["total_trade_value"]) if r.get("total_trade_value") is not None else None
+            source = str(r.get("source", "realtime_stream"))
+            is_closed = bool(r.get("is_closed", True))
+        else:
+            r_dict = r.asDict() if hasattr(r, "asDict") else {}
+            symbol = str(r["symbol"])
+            w_start = r["window_start"]
+            w_end = r["window_end"]
+            open_p = float(r["open"])
+            high_p = float(r["high"])
+            low_p = float(r["low"])
+            close_p = float(r["close"])
+            vol = float(r["volume"])
+            tc = int(r["trade_count"]) if r_dict.get("trade_count") is not None else None
+            bv = float(r["buy_volume"]) if r_dict.get("buy_volume") is not None else None
+            sv = float(r["sell_volume"]) if r_dict.get("sell_volume") is not None else None
+            vw = float(r["vwap"]) if r_dict.get("vwap") is not None else None
+            ti = float(r["trade_imbalance"]) if r_dict.get("trade_imbalance") is not None else None
+            tv = float(r["total_trade_value"]) if r_dict.get("total_trade_value") is not None else None
+            source = str(r_dict.get("source", "realtime_stream"))
+            is_closed = bool(r_dict.get("is_closed", True))
+
+        records.append((
+            symbol, w_start, w_end, open_p, high_p, low_p, close_p, vol,
+            tc, bv, sv, vw, ti, tv, source, is_closed
+        ))
+    return records
+
+
+def write_candles_batch(
+    batch_df: Any, 
+    batch_id: int = 0, 
+    conn=None, 
+    table_name: str = "warehouse.fact_crypto_1m_candles", 
+    close_conn: bool = True,
+    max_retries: int = 3
+) -> int:
+    """
+    Ghi micro-batch nến 1 phút vào PostgreSQL Data Warehouse.
+    Hỗ trợ cả Spark DataFrame, list of dicts, pandas DataFrame.
+    Bảo đảm:
+      - Sử dụng SQL Canonical Reconciliation thống nhất với Gold Layer.
+      - Idempotent upsert: chạy lại không tạo bản ghi trùng.
+      - Hỗ trợ dependency injection conn/table_name cho isolated testing.
+      - Cơ chế retry lũy tiến nếu gặp lỗi mạng tạm thời khi dùng connection mặc định.
+    """
+    if hasattr(batch_df, "isEmpty") and batch_df.isEmpty():
+        return 0
+
+    if hasattr(batch_df, "collect"):
+        rows = batch_df.collect()
+    elif isinstance(batch_df, list):
+        rows = batch_df
+    elif hasattr(batch_df, "to_dict"):
+        rows = batch_df.to_dict(orient="records")
+    else:
+        rows = list(batch_df)
+
+    if not rows:
+        return 0
+
+    records = _normalize_candle_records(rows)
+    upsert_sql = build_upsert_candles_sql(table_name)
+
+    # Retry loop if using internal connection
+    attempts = max_retries if conn is None else 1
+    last_err = None
+
+    for attempt in range(attempts):
+        local_conn = False
+        active_conn = conn
+        try:
+            if active_conn is None:
+                active_conn = get_db_connection()
+                local_conn = True
+
+            cur = active_conn.cursor()
+            cur.executemany(upsert_sql, records)
+            active_conn.commit()
+            cur.close()
+            print(f"[DW SINK] Da nap/cap nhat {len(records)} nen 1m vao PostgreSQL ({table_name})!")
+            return len(records)
+        except Exception as e:
+            last_err = e
+            if active_conn:
+                try:
+                    active_conn.rollback()
+                except Exception:
+                    pass
+            if attempt < attempts - 1 and conn is None:
+                wait_s = 0.5 * (2 ** attempt)
+                print(f"[!] DW sync attempt {attempt + 1} failed ({e}). Retrying in {wait_s:.1f}s...")
+                time.sleep(wait_s)
+            else:
+                print(f"[!] Loi khi nap Nen 1m vao PostgreSQL ({table_name}): {e}")
+                raise last_err
+        finally:
+            if local_conn and close_conn and active_conn:
+                try:
+                    active_conn.close()
+                except Exception:
+                    pass
+
+    return 0
+
+
+def write_historical_candles_batch(
+    records: list, 
+    conn=None, 
+    table_name: str = "warehouse.fact_crypto_1m_candles", 
+    close_conn: bool = True
+) -> int:
+    """
+    Persists historical 1m candles into PostgreSQL DW with source='historical_rest'.
+    Reuses the exact same canonical reconciliation upsert logic to guarantee single source of truth.
     """
     if not records:
         return 0
 
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+    # Ensure source and closure flags are canonical REST
+    formatted_records = []
+    for r in records:
+        item = dict(r) if isinstance(r, dict) else (r.asDict() if hasattr(r, "asDict") else {})
+        item["source"] = "historical_rest"
+        item["is_closed"] = True
+        formatted_records.append(item)
 
-        upsert_sql = """
-            INSERT INTO warehouse.fact_crypto_1m_candles 
-            (symbol, window_start, window_end, open, high, low, close, volume, 
-             trade_count, buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'historical_rest', TRUE)
-            ON CONFLICT (symbol, window_start) DO UPDATE SET
-                open = EXCLUDED.open,
-                high = EXCLUDED.high,
-                low = EXCLUDED.low,
-                close = EXCLUDED.close,
-                volume = EXCLUDED.volume,
-                total_trade_value = EXCLUDED.total_trade_value,
-                trade_count = NULL,
-                buy_volume = NULL,
-                sell_volume = NULL,
-                vwap = NULL,
-                trade_imbalance = NULL,
-                source = 'historical_rest',
-                is_closed = TRUE;
-        """
-
-        formatted_records = [
-            (
-                r["symbol"],
-                r["window_start"],
-                r["window_end"],
-                float(r["open"]),
-                float(r["high"]),
-                float(r["low"]),
-                float(r["close"]),
-                float(r["volume"]),
-                r.get("trade_count"),
-                r.get("buy_volume"),
-                r.get("sell_volume"),
-                r.get("vwap"),
-                r.get("trade_imbalance"),
-                r.get("total_trade_value")
-            )
-            for r in records
-        ]
-
-        cur.executemany(upsert_sql, formatted_records)
-        conn.commit()
-        cur.close()
-        return len(records)
-    except Exception as e:
-        print(f"[!] Error writing historical candles to PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
-        raise e
-    finally:
-        if conn:
-            conn.close()
-
+    return write_candles_batch(
+        formatted_records, 
+        batch_id=0, 
+        conn=conn, 
+        table_name=table_name, 
+        close_conn=close_conn
+    )

@@ -59,6 +59,7 @@ load_env_vars()
 TARGET_SYMBOL = "BTC-USDT"
 KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC_TRADES", os.getenv("KAFKA_TOPIC", "crypto-trades"))
+STORAGE_DESTINATION = get_storage_mode()
 
 S3_BUCKET = get_s3_bucket()
 # Canonical Medallion Bronze Lakehouse is strictly owned and written by bronze_writer.py.

@@ -57,7 +57,9 @@ $javaCandidates = @(
     "C:\Program Files\Java\jdk-17*",
     "C:\Program Files\BellSoft\LibericaJDK-17*",
     "C:\Program Files\Eclipse Adoptium\jdk-11*",
-    "C:\Program Files\Java\jdk-11*"
+    "C:\Program Files\Java\jdk-11*",
+    "C:\Program Files\Java\jdk*",
+    "C:\Program Files\Java\jre*"
 )
 
 $foundJava = $null
@@ -74,7 +76,7 @@ if ($foundJava) {
     $env:PATH = "$foundJava\bin;$env:PATH"
 } elseif (-not $env:JAVA_HOME) {
     $javaCmd = Get-Command java -ErrorAction SilentlyContinue
-    if ($javaCmd) {
+    if ($javaCmd -and $javaCmd.Source -notmatch "Common Files" -and $javaCmd.Source -notmatch "x86") {
         $javaBin = Split-Path -Parent $javaCmd.Source
         $env:JAVA_HOME = Split-Path -Parent $javaBin
     }
@@ -226,6 +228,13 @@ if ($StartPipeline -or $StreamPipeline) {
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
     Write-Host "  KICH HOAT TRON GOI PIPELINE STREAMING THOI GIAN THUC (SPEED LAYER)" -ForegroundColor Cyan
     Write-Host "==========================================================================" -ForegroundColor Cyan
+
+    # 0. Don dep tien trinh cu neu co (tranh xung dot Checkpoint Spark Concurrent Update)
+    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object { 
+        $_.CommandLine -like "*trade_processor.py*" -or $_.CommandLine -like "*okx_producer.py*" 
+    } | ForEach-Object { 
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue 
+    }
 
     # 1. Bật Docker Containers
     Write-Host "`n[1/3] Khoi dong Docker Containers (Kafka:9092 va PostgreSQL:5433)..." -ForegroundColor Yellow

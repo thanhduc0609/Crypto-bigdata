@@ -109,6 +109,7 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
                     buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed
                 FROM warehouse.fact_crypto_1m_candles
                 WHERE symbol = 'BTC-USDT'
+                  AND source = 'historical_rest'
                   AND is_closed = TRUE
                   AND open > 0 AND high > 0 AND low > 0 AND close > 0 AND volume >= 0
                 ORDER BY window_start DESC
@@ -116,6 +117,11 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
             """
             df_db = pd.read_sql(query, conn)
             if not df_db.empty and len(df_db) >= min_candles:
+                # Validate candlestick geometry
+                min_oc = np.minimum(df_db["open"], df_db["close"])
+                max_oc = np.maximum(df_db["open"], df_db["close"])
+                geom_valid = (df_db["low"] <= min_oc) & (max_oc <= df_db["high"])
+                df_db = df_db[geom_valid].copy()
                 df_db["window_start"] = pd.to_datetime(df_db["window_start"], utc=True)
                 df_db["window_end"] = pd.to_datetime(df_db["window_end"], utc=True)
                 latest_ts = df_db["window_start"].iloc[0]
@@ -190,6 +196,74 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
     # Eliminate duplicate timestamps and sort chronologically
     candles_df = candles_df.drop_duplicates(subset=[time_col]).sort_values(time_col).reset_index(drop=True)
 
+    # ML Quality Gate: strictly accept confirmed historical_rest candles
+    if "source" in candles_df.columns:
+        invalid_sources = candles_df[candles_df["source"] != "historical_rest"]
+        if not invalid_sources.empty:
+            print("[PREDICT] Rejected unapproved candle source(s) in ML input. Only confirmed 'historical_rest' candles are accepted.")
+            return None
+
+    if "is_closed" in candles_df.columns:
+        if not candles_df["is_closed"].all():
+            print("[PREDICT] Rejected unclosed candles in ML input. All input candles must have is_closed=True.")
+            return None
+
+    required_cols = ["open", "high", "low", "close", "volume"]
+    for col in required_cols:
+        if col not in candles_df.columns:
+            print(f"[PREDICT] Missing required price column '{col}'. Skipping prediction.")
+            return None
+        if not np.isfinite(candles_df[col]).all():
+            print(f"[PREDICT] Non-finite values detected in column '{col}'. Skipping prediction.")
+            return None
+
+    if (candles_df["open"] <= 0).any() or (candles_df["high"] <= 0).any() or (candles_df["low"] <= 0).any() or (candles_df["close"] <= 0).any():
+        print("[PREDICT] Non-positive prices detected in ML input. Skipping prediction.")
+        return None
+    if (candles_df["volume"] < 0).any():
+        print("[PREDICT] Negative volume detected in ML input. Skipping prediction.")
+        return None
+
+    min_oc = np.minimum(candles_df["open"], candles_df["close"])
+    max_oc = np.maximum(candles_df["open"], candles_df["close"])
+    if (candles_df["low"] > min_oc).any() or (max_oc > candles_df["high"]).any():
+        print("[PREDICT] Candlestick geometry violation detected. Skipping prediction.")
+        return None
+
+    # ML Quality Gate: strictly accept confirmed historical_rest candles
+    if "source" in candles_df.columns:
+        invalid_sources = candles_df[candles_df["source"] != "historical_rest"]
+        if not invalid_sources.empty:
+            print("[PREDICT] Rejected unapproved candle source(s) in ML input. Only confirmed 'historical_rest' candles are accepted.")
+            return None
+
+    if "is_closed" in candles_df.columns:
+        if not candles_df["is_closed"].all():
+            print("[PREDICT] Rejected unclosed candles in ML input. All input candles must have is_closed=True.")
+            return None
+
+    required_cols = ["open", "high", "low", "close", "volume"]
+    for col in required_cols:
+        if col not in candles_df.columns:
+            print(f"[PREDICT] Missing required price column '{col}'. Skipping prediction.")
+            return None
+        if not np.isfinite(candles_df[col]).all():
+            print(f"[PREDICT] Non-finite values detected in column '{col}'. Skipping prediction.")
+            return None
+
+    if (candles_df["open"] <= 0).any() or (candles_df["high"] <= 0).any() or (candles_df["low"] <= 0).any() or (candles_df["close"] <= 0).any():
+        print("[PREDICT] Non-positive prices detected in ML input. Skipping prediction.")
+        return None
+    if (candles_df["volume"] < 0).any():
+        print("[PREDICT] Negative volume detected in ML input. Skipping prediction.")
+        return None
+
+    min_oc = np.minimum(candles_df["open"], candles_df["close"])
+    max_oc = np.maximum(candles_df["open"], candles_df["close"])
+    if (candles_df["low"] > min_oc).any() or (max_oc > candles_df["high"]).any():
+        print("[PREDICT] Candlestick geometry violation detected. Skipping prediction.")
+        return None
+
     # Filter strictly for finalized candles (candle must have fully ended: window_end <= now_utc)
     # NO future tolerance (+5s removed)
     now_utc = datetime.now(timezone.utc)
@@ -230,6 +304,9 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
     latest_row = feat_df.iloc[-1]
     feature_ts = pd.to_datetime(latest_row[time_col], utc=True)
     target_ts = feature_ts + timedelta(minutes=HORIZON_MINUTES)
+    if target_ts <= now_utc:
+        print(f"[PREDICT] Target timestamp ({target_ts.strftime('%Y-%m-%d %H:%M:%S UTC')}) has already elapsed (now={now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}). Skipping realtime prediction.")
+        return None
     current_price = float(latest_row["close"])
 
     X = latest_row[feature_names].values.reshape(1, -1).astype(float)

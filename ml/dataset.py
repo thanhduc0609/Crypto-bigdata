@@ -45,6 +45,8 @@ def load_candles_from_postgres(limit: Optional[int] = None) -> pd.DataFrame:
                 buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source
             FROM warehouse.fact_crypto_1m_candles
             WHERE symbol = 'BTC-USDT'
+              AND source = 'historical_rest'
+              AND is_closed = TRUE
             ORDER BY window_start ASC
         """
         if limit:
@@ -64,6 +66,10 @@ def load_candles_from_lake() -> pd.DataFrame:
         if parquets:
             df = pd.read_parquet(local_gold)
             if not df.empty:
+                if "source" in df.columns:
+                    df = df[df["source"] == "historical_rest"]
+                if "is_closed" in df.columns:
+                    df = df[df["is_closed"] == True]
                 return df
 
     # Check S3 gold path if local not populated
