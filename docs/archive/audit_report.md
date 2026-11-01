@@ -1,5 +1,10 @@
 # 🔍 Comprehensive Audit & Implementation Report: BTC Pipeline & Historical Backfill
 
+> [!NOTE]
+> **TÀI LIỆU LƯU TRỮ PHỤC VỤ ĐỐI CHIẾU LỊCH SỬ (ARCHIVE)**  
+> Tài liệu này được tạo trong các đợt audit trước đây nhằm ghi lại quá trình kiểm thử lịch sử. Tài liệu không phản ánh cấu trúc runtime và các bản vá mới nhất của hệ thống hiện tại.
+
+
 **Audit & Completion Date:** October 23, 2026  
 **Auditor:** Antigravity Advanced Agentic AI Assistant  
 **Target Symbol:** `BTC-USDT` (OKX Global Exchange)  

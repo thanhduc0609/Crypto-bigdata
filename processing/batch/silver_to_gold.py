@@ -337,9 +337,45 @@ def process_silver_to_gold(
     }
 
 
+def sync_gold_to_dw(spark: SparkSession, symbol: str = "BTC-USDT") -> int:
+    """Reads published Gold Parquet and synchronizes all canonical records to PostgreSQL DW."""
+    if symbol != "BTC-USDT":
+        raise ValueError(f"Medallion Pipeline strictly processes 'BTC-USDT', but received: {symbol}")
+    gold_path = get_gold_candles_path(symbol)
+    print(f"[*] Reading Gold candles from {gold_path} for direct DW synchronization...")
+    is_local = not gold_path.startswith("s3a://") and not gold_path.startswith("s3://")
+    if is_local:
+        local_p = Path(gold_path)
+        if not local_p.exists() or not any(local_p.rglob("*.parquet")):
+            print(f"[INFO] Gold path does not exist or has no parquet files ({gold_path}).")
+            return 0
+    try:
+        gold_df = spark.read.parquet(gold_path).filter(col("symbol") == symbol)
+        cnt = gold_df.count()
+        if cnt == 0:
+            print("[INFO] Gold dataset is empty. Nothing to sync.")
+            return 0
+        print(f"[*] Synchronizing {cnt:,} canonical Gold candles to PostgreSQL warehouse...")
+        write_candles_batch(gold_df, batch_id=0, max_retries=3)
+        print("[OK] Successfully synchronized Gold candles to PostgreSQL DW.")
+        return cnt
+    except Exception as e:
+        print(f"[!] Error synchronizing Gold to DW: {e}")
+        raise e
+
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Silver to Gold transformation & DW Sync")
+    parser.add_argument("--sync-dw-only", action="store_true", help="Sync existing Gold parquet directly to PostgreSQL DW without transforming Silver")
+    parser.add_argument("--symbol", default="BTC-USDT", help="Symbol to process (default BTC-USDT)")
+    args = parser.parse_args()
+
     spark = create_spark_session(app_name="SilverToGoldBatch", include_kafka=False)
     try:
-        process_silver_to_gold(spark)
+        if args.sync_dw_only:
+            sync_gold_to_dw(spark, symbol=args.symbol)
+        else:
+            process_silver_to_gold(spark, symbol=args.symbol)
     finally:
         spark.stop()

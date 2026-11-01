@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 from pyspark.sql import SparkSession
+from processing.core.env import load_env_vars
 
 project_root = Path(__file__).resolve().parent.parent.parent
 

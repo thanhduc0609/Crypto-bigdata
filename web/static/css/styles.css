@@ -475,7 +475,7 @@ body {
     font-variant-numeric: tabular-nums;
 }
 
-.num-col, .price-val, .stat-val, .summary-val, .wi-val, .pm-val, .of-value, .page-text {
+.num-col, .price-val, .stat-val, .summary-val, .pm-val, .of-value, .page-text {
     font-variant-numeric: tabular-nums;
 }
 
@@ -778,10 +778,6 @@ body {
     color: var(--text-muted) !important;
 }
 
-.text-right {
-    text-align: right;
-}
-
 .side-badge {
     display: inline-block;
     padding: 1px 6px;
@@ -800,44 +796,10 @@ body {
     color: var(--color-sell);
 }
 
-.eval-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: var(--radius-sm);
-    font-size: 0.75rem;
-    font-weight: 500;
-}
-
-.eval-badge.correct {
-    background-color: #dcfce7;
-    color: var(--color-buy);
-}
-
-.eval-badge.incorrect {
-    background-color: #fee2e2;
-    color: var(--color-sell);
-}
-
-.eval-badge.pending {
-    background-color: #f1f5f9;
-    color: var(--text-muted);
-}
-
-.eval-badge.missing {
-    background-color: #fffbeb;
-    color: var(--color-warning);
-}
-
 .tz-label {
     font-size: 0.75rem;
     color: var(--text-muted);
     font-weight: 500;
-}
-
-.tz-inline {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-left: 2px;
 }
 
 /* Ratio Bar for 60s Realtime Orderflow */
@@ -930,36 +892,6 @@ body {
 
 .eval-text.missing {
     color: var(--color-warning);
-}
-
-/* Worker Status Card */
-.worker-card {
-    border-left: 4px solid #8b5cf6;
-}
-
-.worker-info-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-color);
-}
-
-.worker-item {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.wi-label {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-}
-
-.wi-val {
-    font-size: 0.85rem;
-    font-family: var(--font-mono);
 }
 
 /* Status Badges */

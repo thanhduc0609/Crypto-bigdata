@@ -2,14 +2,17 @@
 =============================================================================
 Crypto Big Data - Safe Data Migration: Reconcile Premature Local Timestamps
 =============================================================================
+CẢNH BÁO: ĐÂY LÀ CÔNG CỤ MIGRATION DÙNG MỘT LẦN (ONE-TIME DATA FIX).
+TUYỆT ĐỐI KHÔNG SỬ DỤNG TRONG QUY TRÌNH VẬN HÀNH ĐỊNH KỲ HOẶC PIPELINE CHÍNH.
+
 Tác vụ đối soát và hiệu chỉnh các bản ghi bị lệch +7 giờ do PySpark chạy
 trên JVM múi giờ địa phương trước khi cấu hình UTC cho Spark Session.
 
 Phạm vi an toàn:
   - Chỉ quét và tác động các bản ghi có trade_time / window_start > NOW() 
     (chính xác 17 lệnh cá mập và 11 nến streaming thử nghiệm ngày 2026-11-01).
-  - Mặc định chạy chế độ DRY-RUN (không chỉnh sửa dữ liệu).
-  - Yêu cầu cờ --apply để chính thức thực thi.
+  - Mặc định chạy chế độ DRY-RUN / AUDIT ONLY (hoàn toàn không sửa đổi CSDL).
+  - Yêu cầu cờ --apply để chính thức thực thi cập nhật.
   - Hỗ trợ cờ --rollback để đảo ngược khi cần.
 =============================================================================
 """
@@ -26,7 +29,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
@@ -41,7 +44,7 @@ def reconcile_timestamps(apply_changes: bool = False, rollback: bool = False):
     now_utc = datetime.now(timezone.utc)
     print("=" * 80)
     print(f"RECONCILE TIMESTAMPS TOOL (NOW UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')})")
-    print(f"Chế độ: {'ROLLBACK (+7H)' if rollback else ('APPLY CHANGES (-7H)' if apply_changes else 'DRY-RUN (CHỈ XEM, KHÔNG GHI)')}")
+    print(f"Chế độ: {'ROLLBACK (+7H)' if rollback else ('APPLY CHANGES (-7H)' if apply_changes else 'DRY-RUN (CHỈ KIỂM TRA, KHÔNG GHI)')}")
     print("=" * 80)
 
     try:
@@ -98,7 +101,6 @@ def reconcile_timestamps(apply_changes: bool = False, rollback: bool = False):
                 print("\nChi tiết giao dịch lớn (Mẫu 5 bản ghi):")
                 for t in trades[:5]:
                     original_time = t[1]
-                    corrected_time = original_time - datetime.resolution * 0 # placeholder
                     print(f"  - Trade ID: {t[0]:<12} | Gốc: {original_time.strftime('%Y-%m-%d %H:%M:%S UTC')} -> Đề xuất: -7 giờ")
 
             if candles:
@@ -108,9 +110,9 @@ def reconcile_timestamps(apply_changes: bool = False, rollback: bool = False):
 
             if not apply_changes:
                 print("\n" + "-" * 80)
-                print("[DRY-RUN HOÀN TẤT] Chưa có thay đổi nào được áp dụng vào CSDL.")
-                print("Để thực hiện điều chỉnh chính xác -7 giờ cho đúng 17 lệnh và 11 nến trên, chạy lệnh:")
-                print("  python scripts/reconcile_trade_timestamps.py --apply")
+                print("[DRY-RUN HOÀN TẤT] Chế độ kiểm tra an toàn: Chưa có thay đổi nào được áp dụng vào CSDL.")
+                print("Để thực hiện điều chỉnh chính xác -7 giờ cho đúng các bản ghi trên, chạy lệnh:")
+                print("  python tools/migration/reconcile_trade_timestamps.py --apply")
                 print("-" * 80)
             else:
                 print("\n[TIẾN HÀNH ĐIỀU CHỈNH AN TOÀN TRONG TRANSACTION]...")
@@ -142,7 +144,7 @@ def reconcile_timestamps(apply_changes: bool = False, rollback: bool = False):
         conn.close()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Reconcile premature timestamps in DW")
+    parser = argparse.ArgumentParser(description="Reconcile premature timestamps in DW (one-time migration tool)")
     parser.add_argument("--apply", action="store_true", help="Apply the -7h timezone adjustment")
     parser.add_argument("--rollback", action="store_true", help="Rollback the timezone adjustment")
     args = parser.parse_args()

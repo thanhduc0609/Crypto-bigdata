@@ -17,7 +17,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from processing.core.spark_session import load_env_vars
+from processing.core.env import load_env_vars
 
 load_env_vars()
 

@@ -1,5 +1,10 @@
 # BTC Pipeline Audit Remediation Report
 
+> [!NOTE]
+> **TÀI LIỆU LƯU TRỮ PHỤC VỤ ĐỐI CHIẾU LỊCH SỬ (ARCHIVE)**  
+> Tài liệu này được tạo trong các đợt remediation trước đây nhằm ghi lại quá trình kiểm thử lịch sử. Tài liệu không phản ánh cấu trúc runtime và các bản vá mới nhất của hệ thống hiện tại.
+
+
 **Project:** Crypto Big Data Platform (BTC-USDT Streaming, Lakehouse & XGBoost Direction Prediction)  
 **Date:** October 23, 2026  
 **Auditor:** Antigravity AI Engineering & Audit Remediation Team  

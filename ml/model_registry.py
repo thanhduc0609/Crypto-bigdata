@@ -8,12 +8,15 @@ Provides safe, versioned synchronization of XGBoost model artifacts with AWS S3:
      s3://<bucket>/crypto/models/v<version>/
   3. Downloads and verifies artifact integrity via SHA-256 before staging.
   4. Never automatically overwrites or activates models without explicit instruction.
+  5. Atomically stages all artifacts before activating to prevent partial overwrite.
 =============================================================================
 """
 
 import os
 import sys
 import json
+import shutil
+import tempfile
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +27,7 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from processing.core.spark_session import load_env_vars
+from processing.core.env import load_env_vars
 from storage.s3 import get_s3_bucket
 
 load_env_vars()
@@ -124,63 +127,82 @@ def download_model_artifacts(
 ) -> Dict[str, Any]:
     """
     Downloads model artifacts from S3, validates SHA-256 checksums, and stages them.
-    Safety rule: only overwrites active local artifacts if activate=True.
+    Safety rule: Always stages and verifies 100% of artifacts before replacing active files.
     """
     bucket = get_s3_bucket()
     s3 = get_s3_client()
 
+    final_active_dir = project_root / "ml" / "artifacts"
     if dest_dir is None:
         if activate:
-            dest_dir = project_root / "ml" / "artifacts"
+            dest_dir = final_active_dir
         else:
             dest_dir = project_root / "ml" / "artifacts" / "staged" / f"v{version}"
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    # Always stage into an isolated temp directory first to ensure atomic replacement
+    temp_stage_dir = Path(tempfile.mkdtemp(prefix="model_stage_"))
 
     print("=" * 80)
     print(f"S3 MODEL REGISTRY - DOWNLOAD & VERIFY VERSION v{version}")
     print(f"Source        : s3://{bucket}/{s3_prefix}/v{version}/")
+    print(f"Staging       : {temp_stage_dir}")
     print(f"Destination   : {dest_dir}")
-    print(f"Activate Model: {activate} (Protected from accidental overwrite)")
+    print(f"Activate Model: {activate} (Protected from partial overwrite)")
     print("=" * 80)
 
-    # 1. Download checksum manifest
-    manifest_s3_key = f"{s3_prefix}/v{version}/checksums.json"
-    local_manifest = dest_dir / "checksums.json"
     try:
-        s3.download_file(bucket, manifest_s3_key, str(local_manifest))
-    except Exception as e:
-        raise FileNotFoundError(f"Could not download manifest from s3://{bucket}/{manifest_s3_key}: {e}")
+        # 1. Download checksum manifest
+        manifest_s3_key = f"{s3_prefix}/v{version}/checksums.json"
+        local_manifest = temp_stage_dir / "checksums.json"
+        try:
+            s3.download_file(bucket, manifest_s3_key, str(local_manifest))
+        except Exception as e:
+            raise FileNotFoundError(f"Could not download manifest from s3://{bucket}/{manifest_s3_key}: {e}")
 
-    with open(local_manifest, "r", encoding="utf-8") as f:
-        manifest_data = json.load(f)
+        with open(local_manifest, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
 
-    expected_checksums = manifest_data.get("checksums", {})
+        expected_checksums = manifest_data.get("checksums", {})
 
-    # 2. Download and verify each artifact
-    verified_files = []
-    for fname, exp_hash in expected_checksums.items():
-        s3_key = f"{s3_prefix}/v{version}/{fname}"
-        local_target = dest_dir / fname
+        # 2. Download and verify each artifact in staging
+        verified_staged = []
+        for fname, exp_hash in expected_checksums.items():
+            s3_key = f"{s3_prefix}/v{version}/{fname}"
+            local_target = temp_stage_dir / fname
 
-        print(f"[*] Downloading s3://{bucket}/{s3_key} -> {local_target.name}...")
-        s3.download_file(bucket, s3_key, str(local_target))
+            print(f"[*] Downloading s3://{bucket}/{s3_key} -> {local_target.name}...")
+            s3.download_file(bucket, s3_key, str(local_target))
 
-        actual_hash = calculate_sha256(local_target)
-        if actual_hash != exp_hash:
-            raise ValueError(
-                f"INTEGRITY FAILURE on {fname}! Expected SHA-256: {exp_hash}, Got: {actual_hash}"
-            )
-        print(f" [PASS] Verified SHA-256 integrity: {actual_hash[:12]}...")
-        verified_files.append(str(local_target))
+            actual_hash = calculate_sha256(local_target)
+            if actual_hash != exp_hash:
+                raise ValueError(
+                    f"INTEGRITY FAILURE on {fname}! Expected SHA-256: {exp_hash}, Got: {actual_hash}"
+                )
+            print(f" [PASS] Verified SHA-256 integrity: {actual_hash[:12]}...")
+            verified_staged.append(fname)
 
-    print(f"[SUCCESS] Downloaded and verified all {len(verified_files)} artifacts with 100% cryptographic integrity.")
-    return {
-        "version": version,
-        "verified_files": verified_files,
-        "activated": activate,
-        "dest_dir": str(dest_dir)
-    }
+        # 3. Only after ALL files have passed 100% integrity check, copy to destination
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        final_files = []
+        for fname in verified_staged:
+            src = temp_stage_dir / fname
+            dst = dest_dir / fname
+            shutil.copy2(src, dst)
+            final_files.append(str(dst))
+
+        # Copy manifest as well
+        shutil.copy2(local_manifest, dest_dir / f"checksums_v{version}.json")
+        shutil.copy2(local_manifest, dest_dir / "checksums.json")
+
+        print(f"[SUCCESS] Downloaded, verified, and activated all {len(final_files)} artifacts atomically.")
+        return {
+            "version": version,
+            "verified_files": final_files,
+            "activated": activate,
+            "dest_dir": str(dest_dir)
+        }
+    finally:
+        shutil.rmtree(temp_stage_dir, ignore_errors=True)
 
 
 def list_s3_model_versions(s3_prefix: str = "crypto/models") -> List[str]:
