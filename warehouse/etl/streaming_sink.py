@@ -10,6 +10,7 @@ Thực hiện ghi dữ liệu streaming nhẹ vào PostgreSQL Data Warehouse:
 
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Any, Union
 
@@ -25,6 +26,32 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from warehouse.etl.db_config import get_db_connection
+
+
+def ensure_utc_datetime(dt: Any) -> Optional[datetime]:
+    """
+    Ensures datetime is UTC-aware.
+    Converts naive datetimes into UTC-aware datetimes without timezone shift.
+    """
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            # Naive datetime from PySpark deserialization representing UTC event time
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    if isinstance(dt, (int, float)):
+        ts = dt / 1000.0 if dt > 1e11 else float(dt)
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    if isinstance(dt, str):
+        try:
+            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            return None
+    return None
 
 
 def compute_whale_tier(val: float) -> str:
@@ -85,8 +112,12 @@ def write_whales_batch(batch_df, batch_id: int = 0, conn=None, table_name: str =
             price = float(r["price"] if not isinstance(r, dict) else r_dict["price"])
             size = float(r["size"] if not isinstance(r, dict) else r_dict["size"])
             side = str(r["side"] if not isinstance(r, dict) else r_dict["side"])
-            trade_time = r["trade_time"] if not isinstance(r, dict) else r_dict["trade_time"]
+            raw_trade_time = r["trade_time"] if not isinstance(r, dict) else r_dict["trade_time"]
+            trade_time = ensure_utc_datetime(raw_trade_time)
             trade_date = r["trade_date"] if not isinstance(r, dict) else r_dict["trade_date"]
+            if trade_date is None and trade_time is not None:
+                trade_date = trade_time.strftime("%Y-%m-%d")
+            arrival = ensure_utc_datetime(arrival)
 
             records.append((
                 trade_id,
@@ -290,7 +321,7 @@ def _normalize_candle_records(rows) -> list:
             is_closed = bool(r_dict.get("is_closed", True))
 
         records.append((
-            symbol, w_start, w_end, open_p, high_p, low_p, close_p, vol,
+            symbol, ensure_utc_datetime(w_start), ensure_utc_datetime(w_end), open_p, high_p, low_p, close_p, vol,
             tc, bv, sv, vw, ti, tv, source, is_closed
         ))
     return records

@@ -103,6 +103,9 @@ def process_crypto_streams(spark: SparkSession):
     print(f"Storage Destination  : {STORAGE_DESTINATION.upper()}")
     print("=" * 80)
 
+    # Đảm bảo Spark Session hoạt động hoàn toàn trên múi giờ UTC
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
+
     # 1. INGESTION: Read raw Kafka stream
     kafka_raw_stream = (
         spark.readStream

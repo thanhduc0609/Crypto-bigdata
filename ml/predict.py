@@ -4,11 +4,14 @@ Crypto Big Data - Machine Learning: Real-Time BTC Direction Inference
 =============================================================================
 Executes near-real-time inference for BTC-USDT price direction (next 5m):
   1. Loads trained XGBoost model and verifies feature schema
-  2. Fetches latest finalized 1m BTC candles
-  3. Calculates rolling features without lookahead
+  2. Fetches latest finalized 1m BTC candles (strictly confirmed/closed)
+  3. Calculates rolling features without lookahead (15 common features)
   4. Predicts binary direction (UP / NOT_UP) and UP probability
   5. Stores prediction into PostgreSQL warehouse.fact_btc_predictions
-  6. Backfills actual outcomes for past predictions once 5 minutes elapse
+  6. Evaluates actual outcomes once the target candle has closed (target + 60s)
+  7. Provides structured rejection reasons: NO_DATA, INSUFFICIENT_HISTORY,
+     STALE_DATA, MISSING_CANDLES, UNCLOSED_CANDLE, INVALID_OHLCV,
+     FEATURE_SCHEMA_MISMATCH, MODEL_UNAVAILABLE, TARGET_EXPIRED, DATABASE_ERROR
 =============================================================================
 """
 
@@ -18,7 +21,7 @@ import json
 import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
 
@@ -29,7 +32,6 @@ if str(project_root) not in sys.path:
 from xgboost import XGBClassifier
 from processing.core.config import get_ml_config
 from processing.features.feature_engineering import compute_features, FEATURE_COLUMNS
-from ml.dataset import fetch_historical_btc_candles
 from warehouse.etl.db_config import get_db_connection
 from warehouse.etl.streaming_sink import write_historical_candles_batch
 from ingestion.historical.candle_parser import parse_okx_rest_candle
@@ -45,6 +47,34 @@ HORIZON_MINUTES = int(ml_cfg.get("prediction", {}).get("horizon_minutes", 5))
 MODEL_NAME = str(ml_cfg.get("ml", {}).get("model_name", "btc_xgboost_direction"))
 MAX_STALENESS_MINUTES = int(ml_cfg.get("prediction", {}).get("max_staleness_minutes", 10))
 
+_cached_model = None
+_cached_features = None
+_last_rejection = {"code": None, "message": None}
+
+
+class RejectionCode:
+    NO_DATA = "NO_DATA"
+    INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
+    STALE_DATA = "STALE_DATA"
+    MISSING_CANDLES = "MISSING_CANDLES"
+    UNCLOSED_CANDLE = "UNCLOSED_CANDLE"
+    INVALID_OHLCV = "INVALID_OHLCV"
+    FEATURE_SCHEMA_MISMATCH = "FEATURE_SCHEMA_MISMATCH"
+    MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+    TARGET_EXPIRED = "TARGET_EXPIRED"
+    DATABASE_ERROR = "DATABASE_ERROR"
+
+
+def get_last_prediction_rejection() -> Dict[str, Any]:
+    """Returns the most recent prediction rejection code and message."""
+    return dict(_last_rejection)
+
+
+def _set_rejection(code: str, message: str):
+    global _last_rejection
+    _last_rejection = {"code": code, "message": message}
+    print(f"[PREDICT REJECTED: {code}] {message}")
+
 
 def get_current_model_version() -> str:
     """Reads model version dynamically from metadata if available."""
@@ -56,9 +86,6 @@ def get_current_model_version() -> str:
         except Exception:
             pass
     return str(ml_cfg.get("ml", {}).get("model_version", "2.0.0"))
-
-_cached_model = None
-_cached_features = None
 
 
 def load_prediction_model():
@@ -87,6 +114,42 @@ def load_prediction_model():
     return model, features
 
 
+def check_existing_prediction(symbol: str, feature_ts: datetime, model_version: str) -> Optional[Dict[str, Any]]:
+    """Checks if a prediction has already been generated for this exact feature candle."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT prediction_id, predicted_direction, probability_up, probability_not_up,
+                       current_price, feature_timestamp, target_timestamp, model_version
+                FROM warehouse.fact_btc_predictions
+                WHERE symbol = %s AND feature_timestamp = %s AND model_version = %s
+                LIMIT 1;
+            """, (symbol, feature_ts, model_version))
+            r = cur.fetchone()
+            if r:
+                return {
+                    "prediction_id": r[0],
+                    "symbol": symbol,
+                    "predicted_direction": r[1],
+                    "direction_label": "UP" if r[1] == 1 else "NOT_UP",
+                    "probability_up": float(r[2]),
+                    "probability_not_up": float(r[3]),
+                    "current_price": float(r[4]),
+                    "feature_timestamp": r[5],
+                    "target_timestamp": r[6],
+                    "model_version": r[7],
+                    "horizon_minutes": HORIZON_MINUTES
+                }
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return None
+
+
 def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
     """
     Fetches the most up-to-date finalized 1m BTC candles for live inference:
@@ -94,50 +157,54 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
       2. If DB candles are stale or insufficient, fetches recent 1m candles directly from OKX REST API,
          parses them using shared candle_parser (strictly confirm == '1', USDT turnover from row[7]),
          syncs them to DW, and uses only finalized candles.
-      3. If no live finalized candles are available, returns empty DataFrame to prevent emitting
-         spurious real-time predictions on stale or unclosed data.
+      3. If no live finalized candles are available, returns empty DataFrame.
     """
     now_utc = datetime.now(timezone.utc)
 
     # 1. Try PostgreSQL DW for real-time finalized candles
     try:
         conn = get_db_connection()
-        try:
-            query = """
-                SELECT 
-                    window_start, window_end, open, high, low, close, volume, 
-                    buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed
-                FROM warehouse.fact_crypto_1m_candles
-                WHERE symbol = 'BTC-USDT'
-                  AND source = 'historical_rest'
-                  AND is_closed = TRUE
-                  AND open > 0 AND high > 0 AND low > 0 AND close > 0 AND volume >= 0
-                ORDER BY window_start DESC
-                LIMIT 120
-            """
-            df_db = pd.read_sql(query, conn)
-            if not df_db.empty and len(df_db) >= min_candles:
-                # Validate candlestick geometry
-                min_oc = np.minimum(df_db["open"], df_db["close"])
-                max_oc = np.maximum(df_db["open"], df_db["close"])
-                geom_valid = (df_db["low"] <= min_oc) & (max_oc <= df_db["high"])
-                df_db = df_db[geom_valid].copy()
-                df_db["window_start"] = pd.to_datetime(df_db["window_start"], utc=True)
-                df_db["window_end"] = pd.to_datetime(df_db["window_end"], utc=True)
-                latest_ts = df_db["window_start"].iloc[0]
-                # Check freshness
-                if (now_utc - latest_ts) <= timedelta(minutes=MAX_STALENESS_MINUTES):
-                    df_sorted = df_db.sort_values("window_start").reset_index(drop=True)
-                    return df_sorted
-        finally:
-            conn.close()
+        if conn:
+            try:
+                query = """
+                    SELECT 
+                        window_start, window_end, open, high, low, close, volume, 
+                        buy_volume, sell_volume, vwap, trade_imbalance, total_trade_value, source, is_closed
+                    FROM warehouse.fact_crypto_1m_candles
+                    WHERE symbol = 'BTC-USDT'
+                      AND source = 'historical_rest'
+                      AND is_closed = TRUE
+                      AND open > 0 AND high > 0 AND low > 0 AND close > 0 AND volume >= 0
+                    ORDER BY window_start DESC
+                    LIMIT 120;
+                """
+                df_db = pd.read_sql(query, conn)
+                if not df_db.empty and len(df_db) >= min_candles:
+                    min_oc = np.minimum(df_db["open"], df_db["close"])
+                    max_oc = np.maximum(df_db["open"], df_db["close"])
+                    geom_valid = (df_db["low"] <= min_oc) & (max_oc <= df_db["high"])
+                    df_db = df_db[geom_valid].copy()
+                    df_db["window_start"] = pd.to_datetime(df_db["window_start"], utc=True)
+                    df_db["window_end"] = pd.to_datetime(df_db["window_end"], utc=True)
+                    latest_ts = df_db["window_start"].iloc[0]
+                    # Nến 1 phút đã đóng gần nhất phải có mốc bắt đầu là phút vừa trôi qua
+                    expected_latest_closed = now_utc.replace(second=0, microsecond=0) - timedelta(minutes=1)
+                    if latest_ts >= expected_latest_closed:
+                        # DB đã cập nhật đủ nến mới nhất vừa đóng cửa
+                        df_sorted = df_db.sort_values("window_start").reset_index(drop=True)
+                        return df_sorted
+            finally:
+                conn.close()
     except Exception as e:
         print(f"[PREDICT] Note checking DB candles: {e}")
 
     # 2. Fetch live recent candles directly from OKX REST API
     try:
         url = "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1m&limit=100"
-        req = urllib.request.Request(url, headers={"User-Agent": "CryptoDataBot/1.0"})
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+        )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8")).get("data", [])
 
@@ -149,123 +216,121 @@ def fetch_live_or_recent_candles(min_candles: int = 40) -> pd.DataFrame:
                     records.append(candle_dict)
 
             if records:
-                # Sync authoritative REST candles to PostgreSQL DW using shared function
                 try:
                     write_historical_candles_batch(records)
-                    print(f"[PREDICT] Synchronized {len(records)} authoritative REST candles to PostgreSQL DW.")
                 except Exception as db_err:
                     print(f"[PREDICT] Database sync failed ({db_err}). Proceeding with in-memory inference from REST.")
 
                 df_finalized = pd.DataFrame(records).sort_values("window_start").reset_index(drop=True)
-                print(f"[PREDICT] Loaded {len(df_finalized)} finalized/closed candles from OKX REST for inference.")
                 return df_finalized
     except Exception as e:
         print(f"[PREDICT] Note: Live OKX REST fetch error ({e}).")
+        # Dự phòng: Nếu OKX REST lỗi mạng, dùng tạm nến DB nếu còn trong ngưỡng MAX_STALENESS_MINUTES
+        if 'df_db' in locals() and not df_db.empty:
+            latest_ts = df_db["window_start"].iloc[0]
+            if (now_utc - latest_ts) <= timedelta(minutes=MAX_STALENESS_MINUTES):
+                return df_db.sort_values("window_start").reset_index(drop=True)
 
-    # Do NOT fallback to stale historical training data for real-time inference
     return pd.DataFrame()
 
 
-def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional[Dict[str, Any]]:
+def run_prediction_detailed(
+    candles_df: Optional[pd.DataFrame] = None,
+    check_duplicate: bool = True
+) -> Dict[str, Any]:
     """
-    Performs inference on the latest finalized BTC candle and saves to PostgreSQL.
+    Performs inference on the latest finalized BTC candle with structured reason codes:
+      - Returns {"success": True, "already_predicted": True/False, "prediction": {...}} on success.
+      - Returns {"success": False, "code": "<CODE>", "message": "<MSG>"} on failure.
     """
-    model, feature_names = load_prediction_model()
+    # 1. Load model
+    try:
+        model, feature_names = load_prediction_model()
+    except Exception as me:
+        code = "MODEL_UNAVAILABLE"
+        msg = f"Không tìm thấy hoặc không thể nạp mô hình XGBoost: {me}"
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
+
     model_version = get_current_model_version()
 
+    # 2. Fetch candles if not provided
     if candles_df is None:
         candles_df = fetch_live_or_recent_candles(min_candles=40)
 
-    # Check for empty data before accessing columns
     if candles_df is None or candles_df.empty:
-        print("[PREDICT] No valid finalized candles available for inference. Skipping prediction.")
-        return None
+        code = "NO_DATA"
+        msg = "Không có nến nào khả dụng từ Data Warehouse hoặc OKX REST để suy luận."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
     time_col = "window_start" if "window_start" in candles_df.columns else "timestamp"
     if time_col not in candles_df.columns:
-        print(f"[PREDICT] Missing timestamp column '{time_col}'. Skipping prediction.")
-        return None
+        code = "NO_DATA"
+        msg = f"Thiếu cột thời gian '{time_col}' trong tập nến đầu vào."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
     candles_df = candles_df.copy()
     candles_df[time_col] = pd.to_datetime(candles_df[time_col], utc=True)
-
     if "window_end" not in candles_df.columns:
         candles_df["window_end"] = candles_df[time_col] + pd.Timedelta(minutes=1)
     candles_df["window_end"] = pd.to_datetime(candles_df["window_end"], utc=True)
 
-    # Eliminate duplicate timestamps and sort chronologically
+    # Deduplicate & sort chronologically
     candles_df = candles_df.drop_duplicates(subset=[time_col]).sort_values(time_col).reset_index(drop=True)
 
-    # ML Quality Gate: strictly accept confirmed historical_rest candles
+    # 3. Validation: source and closure
     if "source" in candles_df.columns:
         invalid_sources = candles_df[candles_df["source"] != "historical_rest"]
         if not invalid_sources.empty:
-            print("[PREDICT] Rejected unapproved candle source(s) in ML input. Only confirmed 'historical_rest' candles are accepted.")
-            return None
+            code = "UNCLOSED_CANDLE"
+            msg = "Từ chối nến stream chưa qua đối soát canonical. Chỉ nến 'historical_rest' được chấp thuận."
+            _set_rejection(code, msg)
+            return {"success": False, "code": code, "message": msg}
 
     if "is_closed" in candles_df.columns:
         if not candles_df["is_closed"].all():
-            print("[PREDICT] Rejected unclosed candles in ML input. All input candles must have is_closed=True.")
-            return None
+            code = "UNCLOSED_CANDLE"
+            msg = "Phát hiện nến chưa đóng (is_closed != True). Chỉ nến đã chốt phiên được đưa vào mô hình."
+            _set_rejection(code, msg)
+            return {"success": False, "code": code, "message": msg}
 
+    # 4. OHLCV Geometry & Numeric Validation
     required_cols = ["open", "high", "low", "close", "volume"]
     for col in required_cols:
         if col not in candles_df.columns:
-            print(f"[PREDICT] Missing required price column '{col}'. Skipping prediction.")
-            return None
+            code = "INVALID_OHLCV"
+            msg = f"Thiếu cột bắt buộc '{col}' trong dữ liệu nến."
+            _set_rejection(code, msg)
+            return {"success": False, "code": code, "message": msg}
         if not np.isfinite(candles_df[col]).all():
-            print(f"[PREDICT] Non-finite values detected in column '{col}'. Skipping prediction.")
-            return None
+            code = "INVALID_OHLCV"
+            msg = f"Phát hiện giá trị không hợp lệ (NaN/Inf) trong cột '{col}'."
+            _set_rejection(code, msg)
+            return {"success": False, "code": code, "message": msg}
 
     if (candles_df["open"] <= 0).any() or (candles_df["high"] <= 0).any() or (candles_df["low"] <= 0).any() or (candles_df["close"] <= 0).any():
-        print("[PREDICT] Non-positive prices detected in ML input. Skipping prediction.")
-        return None
+        code = "INVALID_OHLCV"
+        msg = "Phát hiện giá trị giá <= 0 trong dữ liệu nến."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
+
     if (candles_df["volume"] < 0).any():
-        print("[PREDICT] Negative volume detected in ML input. Skipping prediction.")
-        return None
+        code = "INVALID_OHLCV"
+        msg = "Phát hiện khối lượng giao dịch âm (< 0)."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
     min_oc = np.minimum(candles_df["open"], candles_df["close"])
     max_oc = np.maximum(candles_df["open"], candles_df["close"])
     if (candles_df["low"] > min_oc).any() or (max_oc > candles_df["high"]).any():
-        print("[PREDICT] Candlestick geometry violation detected. Skipping prediction.")
-        return None
+        code = "INVALID_OHLCV"
+        msg = "Vi phạm hình học nến Nhật Bản (Low > min(Open, Close) hoặc High < max(Open, Close))."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    # ML Quality Gate: strictly accept confirmed historical_rest candles
-    if "source" in candles_df.columns:
-        invalid_sources = candles_df[candles_df["source"] != "historical_rest"]
-        if not invalid_sources.empty:
-            print("[PREDICT] Rejected unapproved candle source(s) in ML input. Only confirmed 'historical_rest' candles are accepted.")
-            return None
-
-    if "is_closed" in candles_df.columns:
-        if not candles_df["is_closed"].all():
-            print("[PREDICT] Rejected unclosed candles in ML input. All input candles must have is_closed=True.")
-            return None
-
-    required_cols = ["open", "high", "low", "close", "volume"]
-    for col in required_cols:
-        if col not in candles_df.columns:
-            print(f"[PREDICT] Missing required price column '{col}'. Skipping prediction.")
-            return None
-        if not np.isfinite(candles_df[col]).all():
-            print(f"[PREDICT] Non-finite values detected in column '{col}'. Skipping prediction.")
-            return None
-
-    if (candles_df["open"] <= 0).any() or (candles_df["high"] <= 0).any() or (candles_df["low"] <= 0).any() or (candles_df["close"] <= 0).any():
-        print("[PREDICT] Non-positive prices detected in ML input. Skipping prediction.")
-        return None
-    if (candles_df["volume"] < 0).any():
-        print("[PREDICT] Negative volume detected in ML input. Skipping prediction.")
-        return None
-
-    min_oc = np.minimum(candles_df["open"], candles_df["close"])
-    max_oc = np.maximum(candles_df["open"], candles_df["close"])
-    if (candles_df["low"] > min_oc).any() or (max_oc > candles_df["high"]).any():
-        print("[PREDICT] Candlestick geometry violation detected. Skipping prediction.")
-        return None
-
-    # Filter strictly for finalized candles (candle must have fully ended: window_end <= now_utc)
-    # NO future tolerance (+5s removed)
+    # 5. Finalized mask (window_end <= now_utc)
     now_utc = datetime.now(timezone.utc)
     finalized_mask = (candles_df["window_end"] <= now_utc)
     if "is_closed" in candles_df.columns:
@@ -273,48 +338,75 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
 
     candles_df = candles_df[finalized_mask].copy().reset_index(drop=True)
     if candles_df.empty:
-        print("[PREDICT] No finalized closed candles available yet (waiting for current minute to close).")
-        return None
+        code = "UNCLOSED_CANDLE"
+        msg = "Chưa có nến nào kết thúc chu kỳ (đang chờ phút hiện tại đóng cửa)."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    # Check staleness: latest closed candle must not be older than MAX_STALENESS_MINUTES
+    # 6. Staleness check
     latest_candle_time = candles_df[time_col].iloc[-1]
     if (now_utc - latest_candle_time) > timedelta(minutes=MAX_STALENESS_MINUTES):
-        print(f"[PREDICT] Data is stale: latest candle is at {latest_candle_time} UTC (> {MAX_STALENESS_MINUTES}m old). Skipping prediction.")
-        return None
+        code = "STALE_DATA"
+        msg = f"Dữ liệu nến quá cũ: nến gần nhất là {latest_candle_time.strftime('%Y-%m-%d %H:%M:%S UTC')} (> {MAX_STALENESS_MINUTES} phút)."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    # Check minimum warmup buffer
+    # 7. Warmup buffer & gap detection
     if len(candles_df) < 26:
-        print(f"[PREDICT] Insufficient warmup buffer: {len(candles_df)} candles (need at least 26 consecutive minutes).")
-        return None
+        code = "INSUFFICIENT_HISTORY"
+        msg = f"Không đủ dữ liệu warmup: hiện có {len(candles_df)} nến (cần tối thiểu 26 nến liên tục)."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    # Check for timestamp gaps in the recent evaluation sequence (last 20 candles)
     recent_eval_df = candles_df.iloc[-20:].copy()
     time_deltas = recent_eval_df[time_col].diff().dt.total_seconds().dropna() / 60.0
     if (time_deltas > 1.05).any():
-        print("[PREDICT] Timestamp gap detected in recent candles. Consecutive 1m sequence required for indicators. Skipping prediction.")
-        return None
+        code = "MISSING_CANDLES"
+        msg = "Phát hiện khoảng trống thời gian (gap) trong 20 nến gần nhất."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    # Compute rolling common features
+    # 8. Check duplicate prediction for this feature candle
+    latest_row = candles_df.iloc[-1]
+    feature_ts = pd.to_datetime(latest_row[time_col], utc=True)
+
+    if check_duplicate:
+        existing_pred = check_existing_prediction("BTC-USDT", feature_ts, model_version)
+        if existing_pred:
+            return {
+                "success": True,
+                "already_predicted": True,
+                "prediction": existing_pred,
+                "message": "Nến 1 phút gần nhất đã được dự báo. Đang chờ nến tiếp theo đóng cửa."
+            }
+
+    # 9. Compute rolling features
     feat_df = compute_features(candles_df, feature_mode="common")
     if feat_df.empty or len(feat_df) < 20:
-        print("[PREDICT] Incomplete feature data: not enough historical candles to compute rolling features.")
-        return None
+        code = "INSUFFICIENT_HISTORY"
+        msg = "Không đủ số hàng sau khi trích xuất đặc trưng để tạo vector quan sát."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    # Latest observation
-    latest_row = feat_df.iloc[-1]
-    feature_ts = pd.to_datetime(latest_row[time_col], utc=True)
+    latest_feat_row = feat_df.iloc[-1]
+    feature_ts = pd.to_datetime(latest_feat_row[time_col], utc=True)
     target_ts = feature_ts + timedelta(minutes=HORIZON_MINUTES)
+
     if target_ts <= now_utc:
-        print(f"[PREDICT] Target timestamp ({target_ts.strftime('%Y-%m-%d %H:%M:%S UTC')}) has already elapsed (now={now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}). Skipping realtime prediction.")
-        return None
-    current_price = float(latest_row["close"])
+        code = "TARGET_EXPIRED"
+        msg = f"Mốc thời gian mục tiêu ({target_ts.strftime('%Y-%m-%d %H:%M:%S UTC')}) đã trôi qua trong quá khứ."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    X = latest_row[feature_names].values.reshape(1, -1).astype(float)
+    current_price = float(latest_feat_row["close"])
+    X = latest_feat_row[feature_names].values.reshape(1, -1).astype(float)
     if np.isnan(X).any():
-        print("[PREDICT] Warning: NaN values detected in feature vector. Skipping prediction.")
-        return None
+        code = "FEATURE_SCHEMA_MISMATCH"
+        msg = "Xuất hiện giá trị NaN trong vector đặc trưng (15 common features)."
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
 
-    # Predict
+    # 10. Predict
     pred_dir = int(model.predict(X)[0])
     probabilities = model.predict_proba(X)[0]
     prob_not_up = float(probabilities[0])
@@ -335,9 +427,20 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
         "horizon_minutes": HORIZON_MINUTES
     }
 
-    # Save to PostgreSQL
-    save_prediction_to_db(result)
-    backfill_actual_outcomes(candles_df)
+    # 11. Save to DB
+    try:
+        save_prediction_to_db(result)
+    except Exception as db_err:
+        code = "DATABASE_ERROR"
+        msg = f"Lỗi lưu dự báo vào cơ sở dữ liệu: {db_err}"
+        _set_rejection(code, msg)
+        return {"success": False, "code": code, "message": msg}
+
+    # 12. Evaluate past predictions
+    try:
+        evaluate_unresolved_predictions(candles_df)
+    except Exception as eval_err:
+        print(f"[!] Note on evaluation: {eval_err}")
 
     print(
         f"[PREDICTION] BTC-USDT | "
@@ -347,7 +450,22 @@ def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional
         f"Target Time: {target_ts.strftime('%H:%M:%S UTC')}"
     )
 
-    return result
+    return {
+        "success": True,
+        "already_predicted": False,
+        "prediction": result,
+        "message": "Dự báo mới được tạo thành công"
+    }
+
+
+def run_single_prediction(candles_df: Optional[pd.DataFrame] = None) -> Optional[Dict[str, Any]]:
+    """
+    Backward-compatible entry point returning prediction dict or None.
+    """
+    res = run_prediction_detailed(candles_df=candles_df, check_duplicate=False)
+    if res.get("success"):
+        return res["prediction"]
+    return None
 
 
 def save_prediction_to_db(pred: Dict[str, Any]):
@@ -390,64 +508,116 @@ def save_prediction_to_db(pred: Dict[str, Any]):
         print(f"[!] Warning: Could not save prediction to DB: {e}")
         if conn:
             conn.rollback()
+        raise e
+    finally:
+        if conn:
+            conn.close()
+
+
+def evaluate_unresolved_predictions(candles_df: Optional[pd.DataFrame] = None) -> int:
+    """
+    Evaluates unresolved predictions once the target candle has closed:
+      - Target candle opens at target_timestamp and closes at target_timestamp + 60 seconds.
+      - Finds confirmed closed candle at target_timestamp.
+      - Updates actual_future_price, actual_direction, is_correct in fact_btc_predictions.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return 0
+
+    evaluated_count = 0
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT prediction_id, feature_timestamp, current_price, target_timestamp, predicted_direction
+            FROM warehouse.fact_btc_predictions
+            WHERE symbol = 'BTC-USDT' 
+              AND actual_direction IS NULL
+              AND target_timestamp + INTERVAL '60 seconds' <= CURRENT_TIMESTAMP
+            ORDER BY target_timestamp ASC
+            LIMIT 50;
+        """)
+        unresolved = cur.fetchall()
+        if not unresolved:
+            return 0
+
+        for r in unresolved:
+            pred_id, feat_ts, cur_px, tgt_ts, pred_dir = r[0], r[1], float(r[2]), r[3], r[4]
+            tgt_ts_utc = tgt_ts.astimezone(timezone.utc) if tgt_ts.tzinfo else tgt_ts.replace(tzinfo=timezone.utc)
+
+            future_px = None
+            # 1. Try matching from in-memory candles if provided
+            if candles_df is not None and not candles_df.empty:
+                time_col = "window_start" if "window_start" in candles_df.columns else "timestamp"
+                time_diffs = (pd.to_datetime(candles_df[time_col], utc=True) - tgt_ts_utc).dt.total_seconds().abs()
+                match_mask = time_diffs <= 30
+                if match_mask.any():
+                    closest_idx = time_diffs[match_mask].idxmin()
+                    matched_candle = candles_df.iloc[closest_idx]
+                    if matched_candle.get("is_closed", True):
+                        future_px = float(matched_candle["close"])
+
+            # 2. Try querying PostgreSQL DW for the closed target candle
+            if future_px is None:
+                cur.execute("""
+                    SELECT close
+                    FROM warehouse.fact_crypto_1m_candles
+                    WHERE symbol = 'BTC-USDT'
+                      AND window_start = %s
+                      AND is_closed = TRUE
+                    LIMIT 1;
+                """, (tgt_ts_utc,))
+                candle_row = cur.fetchone()
+                if candle_row:
+                    future_px = float(candle_row[0])
+
+            # 3. If still not in DW, fetch authoritative confirmed candle from OKX REST
+            if future_px is None:
+                try:
+                    ts_ms = int(tgt_ts_utc.timestamp() * 1000)
+                    url = f"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1m&after={ts_ms + 120000}&limit=5"
+                    req = urllib.request.Request(
+                        url,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        res_data = json.loads(resp.read().decode("utf-8")).get("data", [])
+                    for c_raw in res_data:
+                        c_parsed = parse_okx_rest_candle(c_raw, symbol="BTC-USDT", require_closed=True)
+                        if c_parsed and c_parsed["window_start"] == tgt_ts_utc:
+                            future_px = float(c_parsed["close"])
+                            write_historical_candles_batch([c_parsed], conn=conn, close_conn=False)
+                            break
+                except Exception:
+                    pass
+
+            if future_px is not None:
+                actual_dir = 1 if future_px > cur_px else 0
+                is_correct = bool(actual_dir == pred_dir)
+                cur.execute("""
+                    UPDATE warehouse.fact_btc_predictions
+                    SET actual_future_price = %s,
+                        actual_direction = %s,
+                        is_correct = %s
+                    WHERE prediction_id = %s;
+                """, (future_px, actual_dir, is_correct, pred_id))
+                evaluated_count += 1
+                conn.commit()
+
+        return evaluated_count
+    except Exception as e:
+        print(f"[!] Warning during outcome evaluation: {e}")
+        if conn:
+            conn.rollback()
+        return evaluated_count
     finally:
         if conn:
             conn.close()
 
 
 def backfill_actual_outcomes(candles_df: pd.DataFrame):
-    """
-    Backfills past predictions where 5 minutes have elapsed with the actual price and accuracy.
-    """
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Find unresolved predictions older than 5 minutes
-        cur.execute("""
-            SELECT prediction_id, feature_timestamp, current_price, target_timestamp, predicted_direction
-            FROM warehouse.fact_btc_predictions
-            WHERE symbol = 'BTC-USDT' AND actual_direction IS NULL
-              AND target_timestamp <= CURRENT_TIMESTAMP;
-        """)
-        rows = cur.fetchall()
-        if not rows:
-            return
-
-        time_col = "window_start" if "window_start" in candles_df.columns else "timestamp"
-        candles_df = candles_df.copy()
-        candles_df[time_col] = pd.to_datetime(candles_df[time_col])
-
-        update_sql = """
-            UPDATE warehouse.fact_btc_predictions
-            SET actual_future_price = %s,
-                actual_direction = %s,
-                is_correct = %s
-            WHERE prediction_id = %s;
-        """
-
-        for r in rows:
-            pred_id, feat_ts, cur_px, tgt_ts, pred_dir = r[0], r[1], r[2], r[3], r[4]
-            # Match candle strictly equal to target_ts (within 30 seconds of target minute)
-            time_diffs = (candles_df[time_col] - pd.to_datetime(tgt_ts)).dt.total_seconds().abs()
-            valid_mask = time_diffs <= 30
-            if valid_mask.any():
-                closest_idx = time_diffs[valid_mask].idxmin()
-                future_px = float(candles_df.loc[closest_idx, "close"])
-                actual_dir = 1 if future_px > cur_px else 0
-                is_correct = bool(actual_dir == pred_dir)
-                cur.execute(update_sql, (future_px, actual_dir, is_correct, pred_id))
-
-        conn.commit()
-        cur.close()
-    except Exception as e:
-        print(f"[!] Warning during outcome backfill: {e}")
-        if conn:
-            conn.rollback()
-    finally:
-        if conn:
-            conn.close()
+    """Backward-compatible wrapper calling evaluate_unresolved_predictions."""
+    return evaluate_unresolved_predictions(candles_df)
 
 
 if __name__ == "__main__":
