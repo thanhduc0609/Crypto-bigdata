@@ -27,6 +27,7 @@ streaming:
   watermark_delay: "2 minutes"
   window_duration: "1 minute"
   trigger_interval: "10 seconds"
+  large_trade_threshold_usd: 100000.0
   whale_threshold_usd: 500000.0
 
 storage:

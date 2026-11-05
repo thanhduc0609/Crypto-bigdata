@@ -49,7 +49,7 @@ Dự án thu thập, xử lý, lưu trữ và dự báo dữ liệu giao dịch 
                        ▼                                                       ▼
  [Spark Structured Streaming: trade_processor.py]        [Silver Cleansing: bronze_to_silver.py]
   • Watermark 2 phút & dropDuplicates(trade_id)           • Khử trùng lặp & chuẩn hóa thời gian UTC
-  • Phân cấp Whale Alert (>= $10k, $500k)                 • Loại bỏ giá/size invalid (<= 0)
+  • Phân cấp Whale Alert (>= $100k, $1M)                  • Loại bỏ giá/size invalid (<= 0)
   • Tính Tumbling Window 1m (OHLCV, VWAP, Imbalance)                           │
                        │                                                       ▼
                        ├────────────────────────┐        [Gold Aggregation: silver_to_gold.py]
@@ -293,24 +293,16 @@ Script [scripts/setup_env.ps1](file:///d:/CryptoBigdata/Crypto-bigdata/scripts/s
 | :--- | :--- | :--- |
 | **Hạ tầng & CSDL** | `.\scripts\setup_env.ps1 -Info` | Kiểm tra trạng thái Python, PySpark, JDK, Hadoop, Kafka, Postgres |
 | | `.\scripts\setup_env.ps1 -DockerUp` | Khởi động Docker Containers (Kafka:9092 & PostgreSQL DW:5433) |
-| | `.\scripts\setup_env.ps1 -DockerDown` | Dừng toàn bộ Docker Containers |
 | | `.\scripts\setup_env.ps1 -InitWarehouse` | Tạo cấu trúc Star Schema DW (`fact_trades`, `fact_candles_1m`,...) và 10 Views |
-| | `.\scripts\setup_env.ps1 -TestWarehouse` | Chạy bộ kiểm thử tự động Data Warehouse (đo độ trễ truy vấn < 100ms) |
-| **Speed Layer** | `.\scripts\setup_env.ps1 -StreamPipeline` | **[1-Click]** Bật Docker, mở terminal Producer (WS) và terminal Spark Streaming |
+| | `.\scripts\setup_env.ps1 -DockerDown` | Dừng toàn bộ Docker Containers khi kết thúc phiên làm việc |
+| **Speed Layer** | `.\scripts\setup_env.ps1 -StreamPipeline` | **[1-Click]** Bật Docker, khởi tạo DW, mở terminal Producer (WS) và terminal Spark Streaming |
 | | `.\scripts\setup_env.ps1 -RunProducer` | Khởi chạy Ingestion Producer thu thập dữ liệu WebSocket OKX (BTC-USDT) |
 | | `.\scripts\setup_env.ps1 -RunSpark` | Khởi chạy Spark Structured Streaming Engine (làm sạch, nến 1m, ghi S3 & DW) |
-| **Medallion Batch** | `.\scripts\setup_env.ps1 -MedallionPipeline` | **[1-Click]** Chạy tuần tự 4 bước Bronze $\rightarrow$ Silver $\rightarrow$ Gold $\rightarrow$ Sync DW |
-| | `.\scripts\setup_env.ps1 -RunBronze` | Thu thập dữ liệu lịch sử OKX REST vào Bronze Lakehouse |
-| | `.\scripts\setup_env.ps1 -RunSilver` | Làm sạch, khử trùng lặp theo trade_id, chuẩn hóa schema Silver Parquet |
-| | `.\scripts\setup_env.ps1 -RunGold` | Tổng hợp nến 1m OHLCV, VWAP, Imbalance vào Gold Parquet |
-| | `.\scripts\setup_env.ps1 -SyncGoldToDW` | Đồng bộ nến Gold canonical trực tiếp sang PostgreSQL DW (`--sync-dw-only`) |
-| **Học máy (ML)** | `.\scripts\setup_env.ps1 -BuildFeatures` | Trích xuất 15 đặc trưng kỹ thuật chuẩn hóa và tạo nhãn xu hướng tương lai 5m |
-| | `.\scripts\setup_env.ps1 -TrainModel` | Huấn luyện mô hình XGBoost Classifier trên chuỗi thời gian (70% Train / 15% Val / 15% Test) |
+| **Medallion Batch** | `.\scripts\setup_env.ps1 -MedallionPipeline` | **[1-Click]** Chạy tuần tự 3 giai đoạn: Bronze $\rightarrow$ Silver $\rightarrow$ Gold & Đồng bộ DW |
+| **Học máy (ML)** | `.\scripts\setup_env.ps1 -TrainModel` | Huấn luyện mô hình XGBoost Classifier trên chuỗi thời gian (15 đặc trưng, 70% Train / 15% Val / 15% Test) |
 | | `.\scripts\setup_env.ps1 -RunPrediction` | Khởi chạy dịch vụ suy luận thời gian thực, lưu trữ dự báo vào PostgreSQL DW |
-| | `.\scripts\setup_env.ps1 -TestPipeline` | Chạy bộ kiểm thử tự động toàn diện pipeline và ML |
 | **Giao diện Web** | `.\scripts\setup_env.ps1 -WebDashboard` | Khởi chạy Web BTC-USDT Analytics Dashboard (`http://127.0.0.1:5000`) |
-| | `.\scripts\setup_env.ps1 -ViewS3` | Mở menu tương tác khám phá Parquet trên S3 Data Lake và xuất file CSV |
-| | `.\scripts\setup_env.ps1 -InitS3` | Kiểm tra kết nối và khởi tạo cây thư mục Parquet trên AWS S3 |
+| **Kiểm thử (Testing)** | `.\scripts\setup_env.ps1 -TestPipeline` | Chạy bộ kiểm thử tự động toàn diện pipeline, ML và Data Warehouse |
 
 ---
 
@@ -349,27 +341,16 @@ python processing/streaming/trade_processor.py
 ```
 > Script kiểm tra `$LASTEXITCODE` sau từng bước và dừng ngay lập tức nếu có lỗi:
 > - **Giai đoạn 1**: Bronze Ingestion (`ingestion/historical/bronze_ingestion.py`)
-> - **Giai đoạn 2**: Silver Transformation (`processing/batch/bronze_to_silver.py`)
-> - **Giai đoạn 3**: Gold Aggregation (`processing/batch/silver_to_gold.py`)
-> - **Giai đoạn 4**: Sync Gold Canonical sang PostgreSQL DW (`silver_to_gold.py --sync-dw-only`)
+> - **Giai đoạn 2**: Silver Cleansing & Deduplication (`processing/batch/bronze_to_silver.py`)
+> - **Giai đoạn 3**: Gold Aggregation & DW Sync (`processing/batch/silver_to_gold.py`)
 
-#### Cách 2: Chạy riêng lẻ từng giai đoạn
+#### Cách 2: Vận hành thủ công bằng Python
 ```powershell
-# Chạy Bronze Ingestion:
-.\scripts\setup_env.ps1 -RunBronze
-# Hoặc: python ingestion/historical/bronze_ingestion.py --days 30
+# Bước 1: Thu thập lịch sử REST OKX vào Bronze Lakehouse
+python ingestion/historical/bronze_ingestion.py --days 30
 
-# Chạy Silver Cleansing & Deduplication:
-.\scripts\setup_env.ps1 -RunSilver
-# Hoặc: python processing/batch/bronze_to_silver.py
-
-# Chạy Gold 1m OHLCV Aggregation:
-.\scripts\setup_env.ps1 -RunGold
-# Hoặc: python processing/batch/silver_to_gold.py
-
-# Đồng bộ Gold sang PostgreSQL Data Warehouse:
-.\scripts\setup_env.ps1 -SyncGoldToDW
-# Hoặc: python processing/batch/silver_to_gold.py --sync-dw-only
+# Bước 2: Chạy trọn gói biến đổi Silver -> Gold -> Sync DW trong 1 Spark Session duy nhất
+python scripts/run_batch_medallion.py
 ```
 
 ---
@@ -379,9 +360,9 @@ python processing/streaming/trade_processor.py
 Hệ thống Data Warehouse Star Schema được tối ưu hóa cho BTC-USDT:
 - **Bảng Chiều (Dimensions)**:
   - `dim_symbol`: Quản lý cặp giao dịch `BTC-USDT` (partition 0 Kafka), ngưỡng lọc cá mập và độ chính xác giá.
-  - `dim_alert_tier`: Phân cấp độ cảnh báo cá mập (`Mega Whale >= $500K`, `Big Whale $100K - $500K`, `Whale $50K - $100K`, `Large Order $10K - $50K`).
+  - `dim_alert_tier`: Phân cấp độ cảnh báo cá mập (`Mega Whale >= $1M`, `Big Whale $500K - $1M`, `Whale $250K - $500K`, `Large Order $100K - $250K`).
 - **Bảng Sự Kiện (Fact Tables)**:
-  - `fact_crypto_trades`: Lưu trữ các giao dịch lớn/cá mập $\ge \$10,000$ kèm metadata độ trễ streaming.
+  - `fact_crypto_trades`: Lưu trữ các giao dịch lớn/cá mập $\ge \$100,000$ kèm metadata độ trễ streaming.
   - `fact_crypto_1m_candles`: Lưu trữ nến 1 phút với nguồn gốc rõ ràng (`source`: `historical_rest` hoặc `realtime_stream`, trạng thái `is_closed`).
   - `fact_btc_predictions`: Lưu trữ kết quả suy luận xu hướng giá 5 phút từ XGBoost model (`direction_label`, `probability_up`, `features_json`, `actual_future_price`, `is_correct`).
   - `fact_btc_model_evaluation`: Lưu trữ telemetry đánh giá mô hình định kỳ (Accuracy, Precision, Recall, F1, Baseline Lift).
@@ -467,13 +448,10 @@ Dự án áp dụng mô hình phân loại xu hướng giá: **XGBoost Classifie
   > Dự án trình bày trung thực kết quả mô hình theo đúng artifact. Trong lý thuyết tài chính định lượng, chuỗi lợi suất 1 phút của tài sản thanh khoản cao như Bitcoin tiệm cận bước đi ngẫu nhiên (Random Walk) và giả thuyết thị trường hiệu quả (EMH). Việc không vượt qua majority baseline phản ánh đúng thực tế thống kê và không thổi phồng kết quả.
 
 ```powershell
-# 1. Trích xuất 15 đặc trưng kỹ thuật:
-.\scripts\setup_env.ps1 -BuildFeatures
-
-# 2. Huấn luyện mô hình XGBoost:
+# 1. Huấn luyện mô hình XGBoost (tự động trích xuất 15 đặc trưng, phân chia 70/15/15 và đánh giá baseline):
 .\scripts\setup_env.ps1 -TrainModel
 
-# 3. Chạy dịch vụ suy luận:
+# 2. Chạy dịch vụ suy luận thời gian thực:
 .\scripts\setup_env.ps1 -RunPrediction
 ```
 
@@ -482,11 +460,11 @@ Dự án áp dụng mô hình phân loại xu hướng giá: **XGBoost Classifie
 ### 6.7. Khám phá & Xuất dữ liệu S3 Data Lake (`s3_parquet_reader.py`)
 
 ```powershell
-.\scripts\setup_env.ps1 -ViewS3
+python processing/analysis/s3_parquet_reader.py
 ```
 - **Phím 1**: Xem 10 nến 1 phút mới nhất (`crypto/streaming/candles_1m` hoặc `crypto/gold/candles_1m`).
 - **Phím 2**: Xem 10 dòng khớp lệnh sạch mới nhất (`crypto/streaming/trades`).
-- **Phím 3**: Xem danh sách giao dịch cá mập (Whale Trades >= $10K USD).
+- **Phím 3**: Xem danh sách giao dịch cá mập (Whale Trades >= $100K USD).
 - **Phím 4**: Xuất nến 1 phút ra file CSV cục bộ.
 - **Phím 5**: Xuất toàn bộ giao dịch sạch ra file CSV cục bộ.
 

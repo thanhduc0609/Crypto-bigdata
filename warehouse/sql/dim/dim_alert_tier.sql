@@ -21,10 +21,10 @@ CREATE TABLE IF NOT EXISTS dim_alert_tier (
 -- Seed predefined streaming alert tiers
 INSERT INTO dim_alert_tier (tier_code, tier_name, min_value_usd, max_value_usd, badge_color, alert_channel, description)
 VALUES
-    ('MEGA_WHALE', 'Mega Whale (>= $500K)', 500000.00, NULL, '#ef4444', 'TELEGRAM,DASHBOARD,SOUND', 'Giao dịch cá mập cực lớn từ $500,000 trở lên'),
-    ('BIG_WHALE', 'Big Whale ($100K - $500K)', 100000.00, 499999.99, '#f59e0b', 'TELEGRAM,DASHBOARD', 'Giao dịch cá mập lớn từ $100,000 đến $500,000'),
-    ('WHALE', 'Whale ($50K - $100K)', 50000.00, 99999.99, '#3b82f6', 'DASHBOARD', 'Giao dịch cá mập từ $50,000 đến $100,000'),
-    ('LARGE_ORDER', 'Large Order ($10K - $50K)', 10000.00, 49999.99, '#10b981', 'DASHBOARD', 'Lệnh khớp quy mô lớn từ $10,000 đến $50,000')
+    ('MEGA_WHALE', 'Mega Whale (>= $1M)', 1000000.00, NULL, '#ef4444', 'TELEGRAM,DASHBOARD,SOUND', 'Giao dịch cá mập cực lớn từ $1,000,000 trở lên'),
+    ('BIG_WHALE', 'Big Whale ($500K - $1M)', 500000.00, 999999.99, '#f59e0b', 'TELEGRAM,DASHBOARD', 'Giao dịch cá mập lớn từ $500,000 đến $1,000,000'),
+    ('WHALE', 'Whale ($250K - $500K)', 250000.00, 499999.99, '#3b82f6', 'DASHBOARD', 'Giao dịch cá mập từ $250,000 đến $500,000'),
+    ('LARGE_ORDER', 'Large Order ($100K - $250K)', 100000.00, 249999.99, '#10b981', 'DASHBOARD', 'Lệnh khớp quy mô lớn từ $100,000 đến $250,000')
 ON CONFLICT (tier_code) DO UPDATE SET
     tier_name = EXCLUDED.tier_name,
     min_value_usd = EXCLUDED.min_value_usd,

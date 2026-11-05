@@ -20,7 +20,7 @@
         timeframe: "1m",               // "1m", "1h", "1d"
         showVwap: true,
         tradesTimeRange: "all",        // "1h", "24h", "7d", "all"
-        tradesMinValue: 10000,
+        tradesMinValue: 100000,
         tradesPage: 1,
         tradesPageSize: 25,
         tradesTotalPages: 1,

@@ -24,32 +24,39 @@
 
 [CmdletBinding()]
 param (
+    # [1] Thông tin môi trường & Kiểm tra hệ thống
     [switch]$Info,
-    [switch]$StartPipeline,
+
+    # [2] Quản lý Hạ tầng Docker (Kafka & PostgreSQL DW)
+    [switch]$DockerUp,
+    [switch]$DockerDown,
+
+    # [3] Khởi tạo Schema Data Warehouse
+    [switch]$InitWarehouse,
+
+    # [4] Speed Layer (Real-time Streaming End-to-End)
+    [Alias("StartPipeline")]
     [switch]$StreamPipeline,
     [switch]$RunProducer,
     [switch]$RunSpark,
-    [switch]$RunBronze,
-    [switch]$RunSilver,
-    [switch]$RunGold,
-    [switch]$SyncGoldToDW,
+
+    # [5] Medallion Batch Pipeline (Data Lakehouse End-to-End)
     [switch]$MedallionPipeline,
-    [switch]$ViewS3,
-    [switch]$InitS3,
-    [switch]$TestS3,
-    [switch]$InitWarehouse,
-    [switch]$TestWarehouse,
-    [switch]$BuildFeatures,
+
+    # [6] Machine Learning (Huấn luyện & Suy luận End-to-End)
     [switch]$TrainModel,
     [switch]$RunPrediction,
-    [switch]$TestPipeline,
-    [switch]$Dashboard,
+
+    # [7] Giao diện Web Analytics & Trading Dashboard
+    [Alias("Dashboard")]
     [switch]$WebDashboard,
     [string]$WorkerMode = "",
     [switch]$NoBrowser,
-    [switch]$Demo,
-    [switch]$DockerUp,
-    [switch]$DockerDown,
+
+    # [8] Kiểm thử tự động toàn diện End-to-End
+    [switch]$TestPipeline,
+
+    # [9] Tham số mở rộng (Pass-through arguments)
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -220,7 +227,7 @@ function Get-ComponentVersions {
 
     # Python Version
     try {
-        $pyOut = & $env:PYSPARK_PYTHON --version 2>&1
+        $pyOut = & $env:PYSPARK_PYTHON --version 2>&1 | Out-String
         if ($pyOut -match "Python (\d+\.\d+\.\d+)") {
             $pyVer = $Matches[1]
         }
@@ -228,7 +235,7 @@ function Get-ComponentVersions {
 
     # PySpark Version
     try {
-        $spOut = & $env:PYSPARK_PYTHON -c "import pyspark; print(pyspark.__version__)" 2>&1
+        $spOut = & $env:PYSPARK_PYTHON -c "import pyspark; print(pyspark.__version__)" 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0 -and $spOut -notmatch "Error") {
             $sparkVer = $spOut.Trim()
         }
@@ -236,7 +243,7 @@ function Get-ComponentVersions {
 
     # Java Version
     try {
-        $jOut = & java -version 2>&1
+        $jOut = (& java -version 2>&1) | Out-String
         if ($jOut -match 'version "([^"]+)"') {
             $javaVer = $Matches[1]
         }
@@ -290,14 +297,14 @@ Write-Host " [OK] PostgreSQL DW    : $($v.Postgres)" -ForegroundColor $(if ($v.P
 Write-Host "==========================================================================" -ForegroundColor Cyan
 
 # -----------------------------------------------------------------------------
-# 7. ĐIỀU PHỐI VẬN HÀNH DỰA TRÊN THAM SỐ
+# 7. ĐIỀU PHỐI VẬN HÀNH DỰA TRÊN THAM SỐ (END-TO-END PIPELINE & CORE COMMANDS)
 # -----------------------------------------------------------------------------
-if ($StartPipeline -or $StreamPipeline) {
+if ($StreamPipeline) {
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
     Write-Host "  KICH HOAT TRON GOI PIPELINE STREAMING THOI GIAN THUC (SPEED LAYER)" -ForegroundColor Cyan
     Write-Host "==========================================================================" -ForegroundColor Cyan
 
-    # 0. Don dep tien trinh cu cua du an nay (tranh xung dot Checkpoint Spark Concurrent Update)
+    # 0. Dọn dẹp tiến trình stream cũ để tránh xung đột Checkpoint Spark Concurrent Update
     Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object { 
         ($_.CommandLine -like "*$PROJECT_ROOT*" -or $_.CommandLine -like "*Crypto-bigdata*") -and
         ($_.CommandLine -like "*trade_processor.py*" -or $_.CommandLine -like "*okx_producer.py*")
@@ -326,13 +333,12 @@ if ($StartPipeline -or $StreamPipeline) {
         Write-Warning "Database init encountered an issue: $_"
     }
 
-    # 3. Mở cửa sổ riêng cho Producer
+    # 3. Mở cửa sổ riêng cho Producer và Spark Streaming Engine
     Write-Host "`n[3/3] Mo cua so PowerShell rieng cho Producer va Spark Streaming..." -ForegroundColor Green
     
     $producerProc = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$PROJECT_ROOT\scripts\setup_env.ps1", "-RunProducer" -WorkingDirectory $PROJECT_ROOT -PassThru
     Start-Sleep -Seconds 2
 
-    # 4. Mở cửa sổ riêng cho Spark Streaming Engine
     $sparkProc = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$PROJECT_ROOT\scripts\setup_env.ps1", "-RunSpark" -WorkingDirectory $PROJECT_ROOT -PassThru
 
     Write-Host "`n[SUCCESS] Pipeline Streaming da duoc kich hoat thanh cong trong 2 terminal rieng!" -ForegroundColor Cyan
@@ -344,27 +350,14 @@ if ($StartPipeline -or $StreamPipeline) {
 }
 elseif ($MedallionPipeline) {
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
-    Write-Host "  MEDALLION BATCH PIPELINE (BRONZE -> SILVER -> GOLD -> DW SYNC)" -ForegroundColor Cyan
+    Write-Host "  MEDALLION BATCH PIPELINE (BRONZE -> SILVER -> GOLD & DW SYNC)" -ForegroundColor Cyan
     Write-Host "==========================================================================" -ForegroundColor Cyan
 
-    Invoke-PythonStep "Stage 1/4: Medallion Bronze Historical Ingestion" "$PROJECT_ROOT\ingestion\historical\bronze_ingestion.py" $ExtraArgs
-    Invoke-PythonStep "Stage 2/4: Medallion Silver Cleansing & Deduplication" "$PROJECT_ROOT\processing\batch\bronze_to_silver.py" $ExtraArgs
-    Invoke-PythonStep "Stage 3/4: Medallion Gold 1m OHLCV Aggregation" "$PROJECT_ROOT\processing\batch\silver_to_gold.py" $ExtraArgs
-    Invoke-PythonStep "Stage 4/4: Synchronize Canonical Gold Candles to DW" "$PROJECT_ROOT\processing\batch\silver_to_gold.py" @("--sync-dw-only")
+    Invoke-PythonStep "Stage 1/3: Medallion Bronze Historical Ingestion" "$PROJECT_ROOT\ingestion\historical\bronze_ingestion.py" $ExtraArgs
+    Invoke-PythonStep "Stage 2/3: Medallion Silver Cleansing & Deduplication" "$PROJECT_ROOT\processing\batch\bronze_to_silver.py" $ExtraArgs
+    Invoke-PythonStep "Stage 3/3: Medallion Gold 1m OHLCV Aggregation & DW Sync" "$PROJECT_ROOT\processing\batch\silver_to_gold.py" $ExtraArgs
 
-    Write-Host "`n[SUCCESS] Medallion Pipeline completed all 4 stages successfully!" -ForegroundColor Green
-}
-elseif ($RunBronze) {
-    Invoke-PythonStep "Launching Medallion Bronze Historical Ingestion" "$PROJECT_ROOT\ingestion\historical\bronze_ingestion.py" $ExtraArgs
-}
-elseif ($RunSilver) {
-    Invoke-PythonStep "Launching Medallion Silver Batch Transformation" "$PROJECT_ROOT\processing\batch\bronze_to_silver.py" $ExtraArgs
-}
-elseif ($RunGold) {
-    Invoke-PythonStep "Launching Medallion Gold Batch Aggregation" "$PROJECT_ROOT\processing\batch\silver_to_gold.py" $ExtraArgs
-}
-elseif ($SyncGoldToDW) {
-    Invoke-PythonStep "Synchronizing Canonical Gold Candles to PostgreSQL DW" "$PROJECT_ROOT\processing\batch\silver_to_gold.py" @("--sync-dw-only")
+    Write-Host "`n[SUCCESS] Medallion Pipeline completed all 3 stages successfully!" -ForegroundColor Green
 }
 elseif ($DockerUp) {
     Write-Host "`n[+] Starting Kafka and PostgreSQL Containers..." -ForegroundColor Yellow
@@ -374,26 +367,14 @@ elseif ($DockerDown) {
     Write-Host "`n[-] Stopping Docker Containers..." -ForegroundColor Yellow
     docker compose down
 }
+elseif ($InitWarehouse) {
+    Invoke-PythonStep "Initializing PostgreSQL DW Schema and Views" "$PROJECT_ROOT\warehouse\etl\db_config.py"
+}
 elseif ($RunProducer) {
     Invoke-PythonStep "Launching OKX Market Data WebSocket Producer" "$PROJECT_ROOT\ingestion\streaming\okx_producer.py"
 }
 elseif ($RunSpark) {
     Invoke-PythonStep "Launching Spark Structured Streaming Processor (Whale Alerts and S3 Sink)" "$PROJECT_ROOT\processing\streaming\trade_processor.py"
-}
-elseif ($ViewS3) {
-    Invoke-PythonStep "Launching S3 Parquet Streaming Data Lake Explorer" "$PROJECT_ROOT\processing\analysis\s3_parquet_reader.py" $ExtraArgs
-}
-elseif ($InitS3 -or $TestS3) {
-    Invoke-PythonStep "Testing S3 Connection & Initializing Streaming Folders on AWS S3" "$PROJECT_ROOT\tests\test_s3.py"
-}
-elseif ($InitWarehouse) {
-    Invoke-PythonStep "Initializing PostgreSQL DW Schema and Views" "$PROJECT_ROOT\warehouse\etl\db_config.py"
-}
-elseif ($TestWarehouse) {
-    Invoke-PythonStep "Running Automated Streaming Data Warehouse Test Suite" "$PROJECT_ROOT\tests\test_warehouse.py"
-}
-elseif ($BuildFeatures) {
-    Invoke-PythonStep "Executing Feature Engineering & Dataset Creation" "$PROJECT_ROOT\scripts\build_features.py"
 }
 elseif ($TrainModel) {
     Invoke-PythonStep "Training XGBoost BTC Direction Classifier (5-Minute Horizon)" "$PROJECT_ROOT\scripts\train_model.py"
@@ -401,10 +382,7 @@ elseif ($TrainModel) {
 elseif ($RunPrediction) {
     Invoke-PythonStep "Running BTC 5-Minute Direction Inference Service" "$PROJECT_ROOT\scripts\run_prediction.py" $ExtraArgs
 }
-elseif ($TestPipeline) {
-    Invoke-PythonStep "Running Full Pipeline & XGBoost Automated Test Suite" "$PROJECT_ROOT\tests\test_pipeline_e2e.py"
-}
-elseif ($WebDashboard -or $Dashboard) {
+elseif ($WebDashboard) {
     Write-Host "`n[>] Launching Web Analytics and Quant Trading Dashboard (Browser UI)..." -ForegroundColor Cyan
     if ($WorkerMode) {
         $env:PREDICTION_WORKER_MODE = $WorkerMode
@@ -416,56 +394,49 @@ elseif ($WebDashboard -or $Dashboard) {
     }
     & $env:PYSPARK_PYTHON "$PROJECT_ROOT\web\app.py"
 }
+elseif ($TestPipeline) {
+    Invoke-PythonStep "Running Full Pipeline & XGBoost Automated Test Suite" "$PROJECT_ROOT\tests\test_pipeline_e2e.py"
+}
 elseif (-not $Info) {
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
     Write-Host "  DANH SACH LENH VAN HANH HE THONG (SPEED LAYER & MEDALLION BATCH)" -ForegroundColor Cyan
     Write-Host "==========================================================================" -ForegroundColor Cyan
 
-    Write-Host "`n[1] KHOI TAO HA TANG VA CO SO DU LIEU:" -ForegroundColor Yellow
+    Write-Host "`n[1] HA TANG VA CO SO DU LIEU:" -ForegroundColor Yellow
     Write-Host "  .\scripts\setup_env.ps1 -DockerUp" -ForegroundColor White
     Write-Host "    -> Bat Docker containers cho Kafka (9092) va PostgreSQL (5433)." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -InitWarehouse" -ForegroundColor White
-    Write-Host "    -> Nap DDL bang DW (dim_symbol, dim_alert_tier, fact_trades, fact_crypto_1m_candles) va 10 Views." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -TestWarehouse" -ForegroundColor White
-    Write-Host "    -> Chay bo kiem thu tu dong Data Warehouse, xac thuc do tre thap cua Speed Layer." -ForegroundColor DarkGray
+    Write-Host "    -> Nap DDL khoi tao Star Schema Data Warehouse va 10 Views phan tich." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -DockerDown" -ForegroundColor White
+    Write-Host "    -> Dung toan bo Docker containers khi ket thuc phien lam viec." -ForegroundColor DarkGray
 
-    Write-Host "`n[2] SPEED LAYER (REAL-TIME STREAMING):" -ForegroundColor Green
+    Write-Host "`n[2] SPEED LAYER (REAL-TIME STREAMING END-TO-END):" -ForegroundColor Green
     Write-Host "  .\scripts\setup_env.ps1 -StreamPipeline   [1-CLICK BAT TRON GOI SPEED LAYER]" -ForegroundColor Green
-    Write-Host "    -> Tu bat Docker, mo Producer (WebSocket) va Spark Streaming Engine trong terminal rieng." -ForegroundColor DarkGray
+    Write-Host "    -> Tu bat Docker, khoi tao DB, mo Producer (WS) va Spark Streaming trong terminal rieng." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -RunProducer" -ForegroundColor White
-    Write-Host "    -> Thu thap lenh khop thoi gian thuc tu OKX day vao Kafka topic (crypto-trades)." -ForegroundColor DarkGray
+    Write-Host "    -> Chay rieng bo thu thap OKX WebSocket day vao Kafka topic (crypto-trades)." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -RunSpark" -ForegroundColor White
-    Write-Host "    -> Spark Structured Streaming Engine (Whale Alert, 1m Candles, ghi S3 va DW)." -ForegroundColor DarkGray
+    Write-Host "    -> Chay rieng Spark Structured Streaming Engine (Whale Alerts, 1m Candles, S3 & DW)." -ForegroundColor DarkGray
 
-    Write-Host "`n[3] MEDALLION BATCH LAYER (LAKEHOUSE PIPELINE):" -ForegroundColor Cyan
-    Write-Host "  .\scripts\setup_env.ps1 -MedallionPipeline [1-CLICK CHAY TUAN TU 4 GIAI DOAN]" -ForegroundColor Cyan
-    Write-Host "    -> Chay Bronze -> Silver -> Gold -> Sync DW voi kiem tra exit code tung buoc." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -RunBronze" -ForegroundColor White
-    Write-Host "    -> Thu thap lich su REST OKX vao phan vung Bronze (ingestion/historical/bronze_ingestion.py)." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -RunSilver" -ForegroundColor White
-    Write-Host "    -> Lam sach, khu trung lap va chuan hoa vao Silver Parquet (processing/batch/bronze_to_silver.py)." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -RunGold" -ForegroundColor White
-    Write-Host "    -> Tong hop nen 1m, VWAP, Order Flow va luu Gold Parquet (processing/batch/silver_to_gold.py)." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -SyncGoldToDW" -ForegroundColor White
-    Write-Host "    -> Dong bo ket qua Gold Parquet canonical truc tiep vao PostgreSQL fact_crypto_1m_candles." -ForegroundColor DarkGray
+    Write-Host "`n[3] MEDALLION BATCH LAYER (LAKEHOUSE PIPELINE END-TO-END):" -ForegroundColor Cyan
+    Write-Host "  .\scripts\setup_env.ps1 -MedallionPipeline [1-CLICK CHAY TRON GOI MEDALLION BATCH]" -ForegroundColor Cyan
+    Write-Host "    -> Chay tuan tu 3 giai doan: Bronze Ingestion -> Silver Cleansing -> Gold Aggregation & DW Sync." -ForegroundColor DarkGray
 
-    Write-Host "`n[4] HOC MAY & DU BAO (XGBOOST CLASSIFIER):" -ForegroundColor Blue
-    Write-Host "  .\scripts\setup_env.ps1 -BuildFeatures    -> Tinh toan 15 dac trung ky thuat va tao tap du lieu huan luyen." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -TrainModel       -> Huan luyen mo hinh XGBoost 5 phut tren chuoi thoi gian." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -RunPrediction    -> Chay dich vu suy luan real-time, luu vao PostgreSQL DW." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -TestPipeline     -> Chay bo kiem thu tu dong toan dien pipeline & ML." -ForegroundColor DarkGray
+    Write-Host "`n[4] HOC MAY & DU BAO (XGBOOST ML END-TO-END):" -ForegroundColor Blue
+    Write-Host "  .\scripts\setup_env.ps1 -TrainModel" -ForegroundColor White
+    Write-Host "    -> Tinh 15 dac trung, phan chia 70/15/15 kem embargo 5m, huan luyen va danh gia baseline." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -RunPrediction" -ForegroundColor White
+    Write-Host "    -> Chay dich vu suy luan real-time (ho tro --once hoac continuous loop), luu vao DW." -ForegroundColor DarkGray
 
-    Write-Host "`n[5] KHAI THAC VA TRUC QUAN HOA:" -ForegroundColor Magenta
+    Write-Host "`n[5] GIAO DIEN TRUC QUAN HOA (WEB DASHBOARD):" -ForegroundColor Magenta
     Write-Host "  .\scripts\setup_env.ps1 -WebDashboard     [WEB TRADING & ML DASHBOARD]" -ForegroundColor Green
     Write-Host "    -> Khoi chay Web Dashboard tai http://127.0.0.1:5000 (Tuy chon: -WorkerMode auto/manual/off, -NoBrowser)." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -ViewS3" -ForegroundColor White
-    Write-Host "    -> Menu tuong tac kham pha Parquet Streaming tren S3 Data Lake." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -InitS3" -ForegroundColor Yellow
-    Write-Host "    -> Khoi tao nhanh cay thu muc Parquet tren AWS S3." -ForegroundColor DarkGray
 
-    Write-Host "`n[TIEN ICH]:" -ForegroundColor DarkYellow
-    Write-Host "  .\scripts\setup_env.ps1 -Info      -> Kiem tra phien ban Python, Spark, Java, Docker." -ForegroundColor DarkGray
-    Write-Host "  .\scripts\setup_env.ps1 -DockerDown-> Dung toan bo Docker containers khi ket thuc." -ForegroundColor DarkGray
+    Write-Host "`n[6] KIEM THU TOAN DIEN & TIEN ICH:" -ForegroundColor DarkYellow
+    Write-Host "  .\scripts\setup_env.ps1 -TestPipeline" -ForegroundColor White
+    Write-Host "    -> Chay bo kiem thu tu dong toan dien End-to-End Pipeline & ML." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -Info" -ForegroundColor White
+    Write-Host "    -> Kiem tra phien ban va trang thai moi truong (Python, Spark, Java, Docker, Kafka, DW)." -ForegroundColor DarkGray
     Write-Host "`n==========================================================================" -ForegroundColor Cyan
     Write-Host ""
 }

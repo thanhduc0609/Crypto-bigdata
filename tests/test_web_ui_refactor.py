@@ -98,7 +98,7 @@ def test_web_ui_refactor():
                         candles_live[0]["buy_volume"] is None and candles_live[0]["trade_imbalance"] is None)
 
     # 4. Test Large Trades API (Filters, Pagination, Aggregates)
-    res_trades = client.get("/api/trades/large?source=dw&min_value=10000&time_range=all&page=1&page_size=10")
+    res_trades = client.get("/api/trades/large?source=dw&min_value=100000&time_range=all&page=1&page_size=10")
     assert_test("Large Trades DW Status 200", res_trades.status_code == 200)
     trades_json = res_trades.get_json()
     assert_test("Large Trades DW has full-dataset aggregate counters", 
@@ -109,10 +109,10 @@ def test_web_ui_refactor():
         t0 = trades_json["trades"][0]
         assert_test("Large Trade fields formatted correctly",
                     all(k in t0 for k in ("trade_id", "trade_time", "side", "price", "size", "trade_value")) and
-                    t0["trade_value"] >= 10000)
+                    t0["trade_value"] >= 100000)
 
     # 5. Test Large Trades CSV Export
-    res_export = client.get("/api/trades/large/export?min_value=10000&time_range=all")
+    res_export = client.get("/api/trades/large/export?min_value=100000&time_range=all")
     assert_test("Large Trades Export Status 200", res_export.status_code == 200)
     assert_test("Large Trades Export Content-Type text/csv", "text/csv" in res_export.headers.get("Content-Type", ""))
     csv_text = res_export.data.decode("utf-8")

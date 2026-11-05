@@ -78,7 +78,7 @@ Bám sát mô hình chuẩn công nghiệp trong kỹ thuật dữ liệu lớn 
      * Kiểm tra tính hợp lệ của Schema và lọc bỏ dữ liệu rác/lỗi (giá $\le 0$, khối lượng $\le 0$).
      * Cơ chế **Watermarking** (2 - 5 giây) và **`dropDuplicates`** dựa trên `trade_id` để loại bỏ lệnh trùng lặp và lệnh đến trễ do mạng.
      * Tính toán tổng hợp cửa sổ trượt 1 phút (**1-Minute Tumbling Window**): Sinh nến giá OHLCV chuẩn, giá bình quân gia quyền theo khối lượng (**VWAP**), độ lệch khối lượng mua/bán chủ động (**Order Flow Trade Imbalance**).
-     * Phát hiện lệnh Cá mập tức thời (**Whale Trade Alert** $\ge \$10,000$ đến $\ge \$500,000$).
+     * Phát hiện lệnh Cá mập tức thời (**Whale Trade Alert** $\ge \$100,000$ đến $\ge \$1,000,000$).
      * Kỹ nghệ đặc trưng (**Feature Engineering**): Tính toán 15 chỉ số kỹ thuật và vi mô tài chính (MACD, RSI, Bollinger Bands, EMA, SMA, Volatility) không bị rò rỉ dữ liệu tương lai.
 5. **Giai đoạn 5 - Analytics (Phân tích, Dự báo & Khai phá giá trị):**
    * **Học máy phân tích dự báo (Machine Learning):** Triển khai mô hình **XGBoost Classifier (v2.0.0)** để dự báo hướng dịch chuyển giá Bitcoin trong 5 phút tiếp theo (Next 5m Direction).
@@ -138,10 +138,10 @@ Bám sát mô hình chuẩn công nghiệp trong kỹ thuật dữ liệu lớn 
 1. **Bài toán 1 - Phát hiện và cảnh báo dòng tiền Cá mập thời gian thực (Whale Order Detection & Alerting):**
    * Thị trường tiền mã hóa chịu sự chi phối rất lớn từ các tổ chức và cá voi tài chính. Các lệnh mua/bán có giá trị hàng trăm nghìn đến hàng triệu USD có thể làm thay đổi xu hướng thị trường ngay lập tức.
    * Hệ thống giải quyết bài toán phát hiện tức thời trong vòng **dưới 1 giây** các giao dịch khớp lệnh lớn, tự động gắn nhãn và phân loại thành 4 cấp độ:
-     * *Large Order:* $\$10,000 \le \text{Value} < \$50,000$
-     * *Whale:* $\$50,000 \le \text{Value} < \$100,000$
-     * *Big Whale:* $\$100,000 \le \text{Value} < \$500,000$
-     * *Mega Whale:* $\text{Value} \ge \$500,000$
+     * *Large Order:* $\$100,000 \le \text{Value} < \$250,000$
+     * *Whale:* $\$250,000 \le \text{Value} < \$500,000$
+     * *Big Whale:* $\$500,000 \le \text{Value} < \$1,000,000$
+     * *Mega Whale:* $\text{Value} \ge \$1,000,000$
 2. **Bài toán 2 - Đo lường cán cân lực mua - bán tức thời (Order Flow Trade Imbalance & VWAP):**
    * Không chỉ quan sát giá đóng cửa, nhà đầu tư định lượng cần biết bên Mua chủ động (Taker Buy) hay bên Bán chủ động (Taker Sell) đang chiếm ưu thế.
    * Hệ thống giải quyết bài toán tính toán chỉ số mất cân bằng dòng tiền $I \in [-1, 1]$ trong mỗi cửa sổ 1 phút:
@@ -279,7 +279,7 @@ Hệ thống nạp trực tiếp qua **Streaming Micro-batch Sink** vào Postgre
    * `fact_btc_predictions`: Lưu trữ kết quả suy luận dự báo thời gian thực từ mô hình XGBoost.
    * `fact_btc_model_evaluation`: Lưu trữ báo cáo đánh giá hiệu năng mô hình (Accuracy, ROC-AUC, F1, Precision, Recall).
 3. **Hệ thống 10 Analytics Data Mart Views phục vụ trực quan hóa (Latency $< 100$ms):**
-   * `vw_whale_trades`: Radar truy vấn các giao dịch cá mập mới nhất $\ge \$10,000$.
+   * `vw_whale_trades`: Radar truy vấn các giao dịch cá mập mới nhất $\ge \$100,000$.
    * `vw_rolling_5m_metrics`: Tính toán động lượng và khối lượng lăn 5 phút phục vụ tín hiệu Scalping.
    * `vw_order_flow_pressure`: Đánh giá áp lực ròng của phe Mua vs phe Bán theo thời gian thực.
    * `vw_streaming_volatility`: Đo lường độ biến động giá theo tỷ lệ nến High/Low.
@@ -372,7 +372,7 @@ flowchart TD
     end
 
     subgraph S3["3. TẦNG XỬ LÝ PHÂN TÁN (SPARK COMPUTING ENGINE)"]
-        KAFKA -->|Continuous Micro-batch| SPARK_STREAM["Apache Spark Structured Streaming<br/>(trade_processor.py)<br/>• Schema Validation & Null Filter<br/>• Event-time Watermarking (2s-5s)<br/>• dropDuplicates(['trade_id'])<br/>• 1m Tumbling Window Aggregation<br/>• Whale Alerts (>= $10K, $100K, $500K)<br/>• VWAP & Order Flow Imbalance"]
+        KAFKA -->|Continuous Micro-batch| SPARK_STREAM["Apache Spark Structured Streaming<br/>(trade_processor.py)<br/>• Schema Validation & Null Filter<br/>• Event-time Watermarking (2s-5s)<br/>• dropDuplicates(['trade_id'])<br/>• 1m Tumbling Window Aggregation<br/>• Whale Alerts (>= $100K, $500K, $1M)<br/>• VWAP & Order Flow Imbalance"]
         BACKFILL -->|Historical Standardization| SPARK_BATCH["Batch Data Harmonizer<br/>129,599 Sequential Minutes"]
     end
 
@@ -574,9 +574,8 @@ Hệ thống cung cấp kịch bản điều phối trung tâm bằng PowerShell
    ```powershell
    .\scripts\setup_env.ps1 -RunSpark
    ```
-6. **Bước 6: Trích xuất đặc trưng và Huấn luyện mô hình XGBoost (v2.0.0)**
+6. **Bước 6: Huấn luyện mô hình XGBoost (v2.0.0) tự động trích xuất 15 đặc trưng và đánh giá baseline**
    ```powershell
-   .\scripts\setup_env.ps1 -BuildFeatures
    .\scripts\setup_env.ps1 -TrainModel
    ```
 7. **Bước 7: Khởi chạy dịch vụ suy luận dự báo thời gian thực**

@@ -86,8 +86,8 @@ WATERMARK_DELAY = os.getenv("STREAMING_WATERMARK_DELAY", "2 minutes")
 WINDOW_DURATION = os.getenv("STREAMING_WINDOW_DURATION", "1 minute")
 TRIGGER_INTERVAL = os.getenv("STREAMING_TRIGGER_INTERVAL", "10 seconds")
 
-# Large trade storage threshold (fact_crypto_trades >= $10k) and console alert (>= $500k)
-LARGE_TRADE_STORAGE_THRESHOLD = 10000.0
+# Large trade storage threshold (fact_crypto_trades >= $100k) and console alert (>= $500k)
+LARGE_TRADE_STORAGE_THRESHOLD = float(os.getenv("LARGE_TRADE_THRESHOLD_USD", "100000.0"))
 WHALE_CONSOLE_ALERT_THRESHOLD = float(os.getenv("WHALE_ALERT_THRESHOLD_USD", "500000.0"))
 
 
@@ -160,16 +160,16 @@ def process_crypto_streams(spark: SparkSession):
     )
 
     # 4. REAL-TIME WHALE & LARGE TRADE DETECTION
-    # Persist all high-value trades >= $10,000 into DW; classify by tier
+    # Persist all high-value trades >= $100,000 into DW; classify by tier
     large_trades_stream = (
         cleaned_trades_stream
         .filter(col("trade_value") >= LARGE_TRADE_STORAGE_THRESHOLD)
         .withColumn(
             "whale_tier",
-            when(col("trade_value") >= 500000.0, "Mega Whale (>= $500K)")
-            .when(col("trade_value") >= 100000.0, "Big Whale ($100K - $500K)")
-            .when(col("trade_value") >= 50000.0, "Whale ($50K - $100K)")
-            .otherwise("Large Order ($10K - $50K)")
+            when(col("trade_value") >= 1000000.0, "Mega Whale (>= $1M)")
+            .when(col("trade_value") >= 500000.0, "Big Whale ($500K - $1M)")
+            .when(col("trade_value") >= 250000.0, "Whale ($250K - $500K)")
+            .otherwise("Large Order ($100K - $250K)")
         )
     )
 

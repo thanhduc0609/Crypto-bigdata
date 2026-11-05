@@ -230,9 +230,9 @@ def api_large_trades():
     """
     time_range = request.args.get("time_range", "all").lower()
     try:
-        min_value = float(request.args.get("min_value", 10000.0))
+        min_value = float(request.args.get("min_value", 100000.0))
     except ValueError:
-        min_value = 10000.0
+        min_value = 100000.0
 
     page = max(1, int(request.args.get("page", 1)))
     page_size = min(max(10, int(request.args.get("page_size", 25))), 100)
@@ -253,9 +253,9 @@ def api_large_trades_export():
     """Xuất file CSV danh sách giao dịch lớn đúng theo bộ lọc hiện tại"""
     time_range = request.args.get("time_range", "all").lower()
     try:
-        min_value = float(request.args.get("min_value", 10000.0))
+        min_value = float(request.args.get("min_value", 100000.0))
     except ValueError:
-        min_value = 10000.0
+        min_value = 100000.0
 
     csv_data, err = generate_large_trades_csv(
         symbol=TARGET_SYMBOL,

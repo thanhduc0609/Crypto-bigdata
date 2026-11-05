@@ -4,7 +4,7 @@ Crypto Big Data - Real-time Streaming PostgreSQL Sink (Data Mart Serving)
 =============================================================================
 Thực hiện ghi dữ liệu streaming nhẹ vào PostgreSQL Data Warehouse:
   1. Ghi nến 1 phút (fact_crypto_1m_candles): áp dụng quy tắc Canonical Reconciliation dùng chung.
-  2. Ghi các giao dịch cá mập/lệnh lớn (fact_crypto_trades): Lưu lệnh >= $10,000 kèm telemetry độ trễ.
+  2. Ghi các giao dịch cá mập/lệnh lớn (fact_crypto_trades): Lưu lệnh >= $100,000 kèm telemetry độ trễ.
 =============================================================================
 """
 
@@ -55,14 +55,14 @@ def ensure_utc_datetime(dt: Any) -> Optional[datetime]:
 
 
 def compute_whale_tier(val: float) -> str:
-    """Phân loại cấp bậc lệnh cá mập theo giá trị USD"""
-    if val >= 500000.0:
-        return "Mega Whale (>= $500K)"
-    elif val >= 100000.0:
-        return "Big Whale ($100K - $500K)"
-    elif val >= 50000.0:
-        return "Whale ($50K - $100K)"
-    return "Large Order ($10K - $50K)"
+    """Phân loại cấp bậc lệnh cá mập theo giá trị USD (ngưỡng tối thiểu $100K)"""
+    if val >= 1000000.0:
+        return "Mega Whale (>= $1M)"
+    elif val >= 500000.0:
+        return "Big Whale ($500K - $1M)"
+    elif val >= 250000.0:
+        return "Whale ($250K - $500K)"
+    return "Large Order ($100K - $250K)"
 
 
 def write_whales_batch(batch_df, batch_id: int = 0, conn=None, table_name: str = "warehouse.fact_crypto_trades", close_conn: bool = True):

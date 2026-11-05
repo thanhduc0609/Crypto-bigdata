@@ -36,17 +36,17 @@ SELECT
     COALESCE(
         t.whale_tier::text,
         CASE 
-            WHEN t.trade_value >= 500000 THEN 'Mega Whale (>= $500K)'
-            WHEN t.trade_value >= 100000 THEN 'Big Whale ($100K - $500K)'
-            WHEN t.trade_value >= 50000  THEN 'Whale ($50K - $100K)'
-            ELSE 'Large Order ($10K - $50K)'
+            WHEN t.trade_value >= 1000000 THEN 'Mega Whale (>= $1M)'
+            WHEN t.trade_value >= 500000  THEN 'Big Whale ($500K - $1M)'
+            WHEN t.trade_value >= 250000  THEN 'Whale ($250K - $500K)'
+            ELSE 'Large Order ($100K - $250K)'
         END
     ) AS whale_tier,
     ROUND(EXTRACT(EPOCH FROM (t.created_at - t.trade_time))::numeric, 2) AS streaming_latency_sec,
     t.kafka_partition,
     t.kafka_offset
 FROM fact_crypto_trades t
-WHERE t.trade_value >= 10000
+WHERE t.trade_value >= 100000
 ORDER BY t.trade_time DESC;
 
 

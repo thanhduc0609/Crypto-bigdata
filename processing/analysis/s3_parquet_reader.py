@@ -138,7 +138,7 @@ def interactive_menu(spark: SparkSession, bucket: str):
         print("=" * 65)
         print("1. Xem nến 1 phút thời gian thực (1m Streaming Candles)")
         print("2. Xem giao dịch thô đã làm sạch (Cleaned Raw Trades)")
-        print("3. Xem danh sách giao dịch cá mập (Whale Trades >= $10K)")
+        print("3. Xem danh sách giao dịch cá mập (Whale Trades >= $100K)")
         print("4. Xuất nến 1 phút ra CSV (data/exports/streaming_candles_1m_*.csv)")
         print("5. Xuất Raw Trades ra CSV (data/exports/streaming_raw_trades_*.csv)")
         print("0. Thoát")
@@ -155,8 +155,8 @@ def interactive_menu(spark: SparkSession, bucket: str):
             show_raw_trades(spark, paths, symbol=sym if sym else None)
         elif choice == "3":
             sym = input("Nhap symbol (Enter de lay het): ").strip().upper()
-            threshold = input("Nhap nguong USD (mac dinh 10000): ").strip()
-            val = float(threshold) if threshold else 10000.0
+            threshold = input("Nhap nguong USD (mac dinh 100000): ").strip()
+            val = float(threshold) if threshold else 100000.0
             show_raw_trades(spark, paths, symbol=sym if sym else None, min_value=val)
         elif choice == "4":
             sym = input("Nhap symbol (Enter de xuat het): ").strip().upper()

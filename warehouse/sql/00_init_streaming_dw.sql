@@ -78,10 +78,10 @@ CREATE TABLE IF NOT EXISTS warehouse.dim_alert_tier (
 
 INSERT INTO warehouse.dim_alert_tier (tier_code, tier_name, min_value_usd, max_value_usd, badge_color, alert_channel, description)
 VALUES
-    ('MEGA_WHALE', 'Mega Whale (>= $500K)', 500000.00, NULL, '#ef4444', 'TELEGRAM,DASHBOARD,SOUND', 'Giao dịch cá mập cực lớn từ $500,000 trở lên'),
-    ('BIG_WHALE', 'Big Whale ($100K - $500K)', 100000.00, 499999.99, '#f59e0b', 'TELEGRAM,DASHBOARD', 'Giao dịch cá mập lớn từ $100,000 đến $500,000'),
-    ('WHALE', 'Whale ($50K - $100K)', 50000.00, 99999.99, '#3b82f6', 'DASHBOARD', 'Giao dịch cá mập từ $50,000 đến $100,000'),
-    ('LARGE_ORDER', 'Large Order ($10K - $50K)', 10000.00, 49999.99, '#10b981', 'DASHBOARD', 'Lệnh khớp quy mô lớn từ $10,000 đến $50,000')
+    ('MEGA_WHALE', 'Mega Whale (>= $1M)', 1000000.00, NULL, '#ef4444', 'TELEGRAM,DASHBOARD,SOUND', 'Giao dịch cá mập cực lớn từ $1,000,000 trở lên'),
+    ('BIG_WHALE', 'Big Whale ($500K - $1M)', 500000.00, 999999.99, '#f59e0b', 'TELEGRAM,DASHBOARD', 'Giao dịch cá mập lớn từ $500,000 đến $1,000,000'),
+    ('WHALE', 'Whale ($250K - $500K)', 250000.00, 499999.99, '#3b82f6', 'DASHBOARD', 'Giao dịch cá mập từ $250,000 đến $500,000'),
+    ('LARGE_ORDER', 'Large Order ($100K - $250K)', 100000.00, 249999.99, '#10b981', 'DASHBOARD', 'Lệnh khớp quy mô lớn từ $100,000 đến $250,000')
 ON CONFLICT (tier_code) DO UPDATE SET
     tier_name = EXCLUDED.tier_name,
     min_value_usd = EXCLUDED.min_value_usd,
@@ -114,10 +114,10 @@ ALTER TABLE warehouse.fact_crypto_trades ADD COLUMN IF NOT EXISTS whale_tier VAR
 
 UPDATE warehouse.fact_crypto_trades
 SET whale_tier = CASE 
-    WHEN trade_value >= 500000 THEN 'Mega Whale (>= $500K)'
-    WHEN trade_value >= 100000 THEN 'Big Whale ($100K - $500K)'
-    WHEN trade_value >= 50000  THEN 'Whale ($50K - $100K)'
-    ELSE 'Large Order ($10K - $50K)'
+    WHEN trade_value >= 1000000 THEN 'Mega Whale (>= $1M)'
+    WHEN trade_value >= 500000  THEN 'Big Whale ($500K - $1M)'
+    WHEN trade_value >= 250000  THEN 'Whale ($250K - $500K)'
+    ELSE 'Large Order ($100K - $250K)'
 END
 WHERE whale_tier IS NULL;
 
@@ -181,17 +181,17 @@ SELECT
     COALESCE(
         t.whale_tier::text,
         CASE 
-            WHEN t.trade_value >= 500000 THEN 'Mega Whale (>= $500K)'
-            WHEN t.trade_value >= 100000 THEN 'Big Whale ($100K - $500K)'
-            WHEN t.trade_value >= 50000  THEN 'Whale ($50K - $100K)'
-            ELSE 'Large Order ($10K - $50K)'
+            WHEN t.trade_value >= 1000000 THEN 'Mega Whale (>= $1M)'
+            WHEN t.trade_value >= 500000  THEN 'Big Whale ($500K - $1M)'
+            WHEN t.trade_value >= 250000  THEN 'Whale ($250K - $500K)'
+            ELSE 'Large Order ($100K - $250K)'
         END
     ) AS whale_tier,
     ROUND(EXTRACT(EPOCH FROM (t.created_at - t.trade_time))::numeric, 2) AS streaming_latency_sec,
     t.kafka_partition,
     t.kafka_offset
 FROM warehouse.fact_crypto_trades t
-WHERE t.trade_value >= 10000
+WHERE t.trade_value >= 100000
 ORDER BY t.trade_time DESC;
 
 -- View 2: Rolling 5M Momentum

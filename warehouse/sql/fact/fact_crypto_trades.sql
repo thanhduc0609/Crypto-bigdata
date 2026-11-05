@@ -31,10 +31,10 @@ ALTER TABLE fact_crypto_trades ADD COLUMN IF NOT EXISTS whale_tier VARCHAR(32);
 -- Cập nhật cấp bậc cá mập cho toàn bộ bản ghi theo phân cấp định lượng
 UPDATE fact_crypto_trades
 SET whale_tier = CASE 
-    WHEN trade_value >= 500000 THEN 'Mega Whale (>= $500K)'
-    WHEN trade_value >= 100000 THEN 'Big Whale ($100K - $500K)'
-    WHEN trade_value >= 50000  THEN 'Whale ($50K - $100K)'
-    ELSE 'Large Order ($10K - $50K)'
+    WHEN trade_value >= 1000000 THEN 'Mega Whale (>= $1M)'
+    WHEN trade_value >= 500000  THEN 'Big Whale ($500K - $1M)'
+    WHEN trade_value >= 250000  THEN 'Whale ($250K - $500K)'
+    ELSE 'Large Order ($100K - $250K)'
 END;
 
 -- Indexes for Streaming Query Optimization & Radar Lookups
