@@ -63,9 +63,16 @@ def get_large_trades(
 
             where_sql = "WHERE " + " AND ".join(where_conditions)
 
-            # 1. Thống kê toàn bộ tập kết quả thỏa điều kiện
+            # 1. Thống kê toàn bộ tập kết quả thỏa điều kiện (bao gồm phân tách Mua/Bán cho Donut Chart)
             count_sql = f"""
-                SELECT COUNT(*), COALESCE(SUM(trade_value), 0.0), MAX(trade_time)
+                SELECT 
+                    COUNT(*), 
+                    COALESCE(SUM(trade_value), 0.0), 
+                    MAX(trade_time),
+                    COALESCE(SUM(CASE WHEN LOWER(side) = 'buy' THEN trade_value ELSE 0.0 END), 0.0) AS buy_value,
+                    COALESCE(SUM(CASE WHEN LOWER(side) = 'sell' THEN trade_value ELSE 0.0 END), 0.0) AS sell_value,
+                    COUNT(CASE WHEN LOWER(side) = 'buy' THEN 1 END) AS buy_count,
+                    COUNT(CASE WHEN LOWER(side) = 'sell' THEN 1 END) AS sell_count
                 FROM warehouse.fact_crypto_trades
                 {where_sql};
             """
@@ -74,6 +81,23 @@ def get_large_trades(
             total_count = agg[0]
             total_value = float(agg[1])
             data_ts = format_iso_utc(agg[2])
+            buy_val = float(agg[3])
+            sell_val = float(agg[4])
+            buy_cnt = int(agg[5])
+            sell_cnt = int(agg[6])
+
+            buy_pct = round((buy_val / total_value * 100), 1) if total_value > 0 else 0.0
+            sell_pct = round((sell_val / total_value * 100), 1) if total_value > 0 else 0.0
+
+            breakdown = {
+                "total_value": round(total_value, 2),
+                "buy_value": round(buy_val, 2),
+                "sell_value": round(sell_val, 2),
+                "buy_pct": buy_pct,
+                "sell_pct": sell_pct,
+                "buy_count": buy_cnt,
+                "sell_count": sell_cnt
+            }
 
             # 2. Truy vấn dữ liệu có phân trang, sắp xếp ổn định deterministic
             query_sql = f"""
@@ -104,6 +128,7 @@ def get_large_trades(
                 "source": "postgres_dw",
                 "total_count": total_count,
                 "total_value": round(total_value, 2),
+                "breakdown": breakdown,
                 "page": page,
                 "page_size": page_size,
                 "total_pages": total_pages,

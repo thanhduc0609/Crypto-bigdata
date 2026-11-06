@@ -76,19 +76,19 @@ def reconcile_timestamps(apply_changes: bool = False, rollback: bool = False):
                     print(f"[SUCCESS] Đã hoàn tác rollback cho {len(rows)} bản ghi.")
                 return
 
-            # Quét các bản ghi có timestamp trong tương lai (> NOW)
+            # Quét các bản ghi có timestamp bị lệch (+7h so với created_at)
             cur.execute("""
-                SELECT trade_id, trade_time, price, trade_value
+                SELECT trade_id, trade_time, price, trade_value, created_at
                 FROM warehouse.fact_crypto_trades
-                WHERE trade_time > NOW() AND trade_time >= '2026-11-01 12:00:00+00'
+                WHERE trade_time > created_at
                 ORDER BY trade_time ASC;
             """)
             trades = cur.fetchall()
 
             cur.execute("""
-                SELECT window_start, window_end, open, close, volume, source
+                SELECT window_start, window_end, open, close, volume, source, created_at
                 FROM warehouse.fact_crypto_1m_candles
-                WHERE window_start > NOW() AND window_start >= '2026-11-01 12:00:00+00'
+                WHERE source = 'realtime_stream' AND window_start > created_at
                 ORDER BY window_start ASC;
             """)
             candles = cur.fetchall()
@@ -120,19 +120,33 @@ def reconcile_timestamps(apply_changes: bool = False, rollback: bool = False):
                     cur.execute("""
                         UPDATE warehouse.fact_crypto_trades
                         SET trade_time = trade_time - INTERVAL '7 hours',
+                            kafka_arrival_time = kafka_arrival_time - INTERVAL '7 hours',
                             trade_date = (trade_time - INTERVAL '7 hours')::date
-                        WHERE trade_time > NOW() AND trade_time >= '2026-11-01 12:00:00+00';
+                        WHERE trade_time > created_at;
                     """)
                     print(f"  [+] Đã cập nhật {cur.rowcount} bản ghi fact_crypto_trades.")
 
                 if candles:
+                    # 1. Xóa các nến realtime_stream trùng lặp khi đã có nến authoritative historical_rest
+                    cur.execute("""
+                        DELETE FROM warehouse.fact_crypto_1m_candles c
+                        WHERE c.source = 'realtime_stream' AND c.window_start > c.created_at
+                        AND EXISTS (
+                            SELECT 1 FROM warehouse.fact_crypto_1m_candles other
+                            WHERE other.symbol = c.symbol 
+                            AND other.window_start = c.window_start - INTERVAL '7 hours'
+                        );
+                    """)
+                    print(f"  [+] Đã dọn dẹp {cur.rowcount} nến stream trùng lặp (đã có nến authoritative REST).")
+
+                    # 2. Cập nhật các nến stream gần nhất còn lại lùi 7 giờ về đúng chuẩn UTC
                     cur.execute("""
                         UPDATE warehouse.fact_crypto_1m_candles
                         SET window_start = window_start - INTERVAL '7 hours',
                             window_end = window_end - INTERVAL '7 hours'
-                        WHERE window_start > NOW() AND window_start >= '2026-11-01 12:00:00+00';
+                        WHERE source = 'realtime_stream' AND window_start > created_at;
                     """)
-                    print(f"  [+] Đã cập nhật {cur.rowcount} bản ghi fact_crypto_1m_candles.")
+                    print(f"  [+] Đã cập nhật {cur.rowcount} nến realtime_stream còn lại.")
 
                 conn.commit()
                 print("\n[SUCCESS] Giao dịch thành công (TRANSACTION COMMITTED).")

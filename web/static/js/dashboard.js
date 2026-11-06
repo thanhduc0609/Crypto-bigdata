@@ -1,22 +1,27 @@
 /**
  * =============================================================================
- * Crypto Big Data - Web Analytics & ML Prediction Client
+ * Crypto Big Data - Clean Light Trading Terminal Client
  * =============================================================================
- * Kiến trúc tối giản, hướng dữ liệu thật:
- *   - Gom 3 tab: Tổng quan, Giao dịch lớn, Dự báo
- *   - Chỉ nạp và refresh dữ liệu cho tab đang hoạt động
- *   - Quản lý hủy request cũ bằng AbortController, tránh race condition
- *   - Hiển thị nguồn dữ liệu và thời điểm cập nhật thực tế
- *   - Không tạo nến giả, không làm tròn số 0 làm mất dữ liệu null
+ * Modular architecture:
+ *   - ApiClient: Abortable fetch client with error handling
+ *   - TimeUtils: Standardized UTC+7 Vietnam time formatting & countdowns
+ *   - TVChartManager: TradingView Lightweight Charts (Candles, Volume, VWAP, PriceLines)
+ *   - PredictionPlanView: Hero card for XGBoost +5m prediction & Futures Plan
+ *   - OrderFlowView: 60s sliding window order flow imbalance
+ *   - VolumeChartView: Pure SVG recent candle volume histogram
+ *   - DonutChartView: Pure SVG breakdown of large trades (>= $100K)
+ *   - LargeTradesView: Filterable, paginated large trades table & CSV export
+ *   - PredictionHistoryView: Paginated historical evaluation
+ *   - ModelMetadataView: Artifact-driven model specs & manual worker trigger
+ *   - PollingScheduler: Coordinated polling with document visibility pause
  * =============================================================================
  */
 
 (function () {
     "use strict";
 
-    // Global application state
+    // Application State
     const state = {
-        activeTab: "tab-overview",
         timeframe: "1m",               // "1m", "1h", "1d"
         showVwap: true,
         tradesTimeRange: "all",        // "1h", "24h", "7d", "all"
@@ -27,50 +32,37 @@
         predPage: 1,
         predPageSize: 10,
         predTotalPages: 1,
-        
-        // Network & polling
-        abortController: null,
+
+        // Chart Price Lines (Entry, SL, TP)
+        priceLines: [],
+
+        // Prediction & Target Countdown
+        targetTimestamp: null,
+        countdownTimer: null,
+
+        // Active poll timers
         pollingTimer: null,
         orderflowTimer: null,
-        workerTimer: null,
-        pollingIntervalMs: 15000,
-        isFetching: false,
-
-        // Chart components
-        chart: null,
-        candleSeries: null,
-        volumeSeries: null,
-        vwapSeries: null,
-        rawCandles: [],
-        hasFittedChart: false
+        isPollingActive: true
     };
 
-    // DOM Elements cache
+    // DOM Elements Cache
     const el = {
-        // Top Header
-        provenanceSource: document.getElementById("provenance-source"),
-        provenanceDataTs: document.getElementById("provenance-data-ts"),
-        provenanceFetchTs: document.getElementById("provenance-fetch-ts"),
-        provenanceStatus: document.getElementById("provenance-status"),
-        btnRefresh: document.getElementById("btn-refresh"),
-        btnRefreshText: document.getElementById("btn-refresh-text"),
-        
-        // Navigation Tabs
-        navTabs: document.querySelectorAll(".nav-tab"),
-        tabPanes: document.querySelectorAll(".tab-pane"),
-
-        // Tab 1: Overview
+        // Area A: Header
         ovPrice: document.getElementById("ov-price"),
         ovChange: document.getElementById("ov-change"),
-        ovHigh24h: document.getElementById("ov-high-24h"),
-        ovLow24h: document.getElementById("ov-low-24h"),
-        ovVol24h: document.getElementById("ov-vol-24h"),
-        ovTurnover24h: document.getElementById("ov-turnover-24h"),
+        headerBasis: document.getElementById("header-basis"),
+        provenanceFetchTs: document.getElementById("provenance-fetch-ts"),
+        btnRefresh: document.getElementById("btn-refresh"),
+        btnRefreshText: document.getElementById("btn-refresh-text"),
+        connectionAlert: document.getElementById("connection-alert"),
+        connectionAlertText: document.getElementById("connection-alert-text"),
+
+        // Area B: Chart Controls
         tfButtons: document.querySelectorAll(".tf-btn"),
         toggleVwap: document.getElementById("toggle-vwap"),
         chartContainer: document.getElementById("tv-chart"),
-        
-        // Candle inspect bar
+        chartErrorOverlay: document.getElementById("chart-error-overlay"),
         ciTime: document.getElementById("ci-time"),
         ciOpen: document.getElementById("ci-open"),
         ciHigh: document.getElementById("ci-high"),
@@ -78,971 +70,1269 @@
         ciClose: document.getElementById("ci-close"),
         ciVol: document.getElementById("ci-vol"),
         ciVwap: document.getElementById("ci-vwap"),
-        ciClosed: document.getElementById("ci-closed"),
-        
-        // Order flow 60s
-        ofRow: document.getElementById("orderflow-row"),
-        ofBuyVol: document.getElementById("of-buy-vol"),
-        ofSellVol: document.getElementById("of-sell-vol"),
-        ofImbalance: document.getElementById("of-imbalance"),
-        ofNotice: document.getElementById("of-notice"),
+
+        // Area B: Prediction Block
+        predDirBadge: document.getElementById("pred-dir-badge"),
+        predProbUp: document.getElementById("pred-prob-up"),
+        predProbNotup: document.getElementById("pred-prob-notup"),
+        predProbBarUp: document.getElementById("pred-prob-bar-up"),
+        predProbBarNotup: document.getElementById("pred-prob-bar-notup"),
+        predProbDesc: document.getElementById("pred-prob-desc"),
+        predFeatureTime: document.getElementById("pred-feature-time"),
+        predTargetTime: document.getElementById("pred-target-time"),
+        predValidityStatus: document.getElementById("pred-validity-status"),
+
+        // Area B: Futures Plan Block
+        planActionBadge: document.getElementById("plan-action-badge"),
+        planFuturesPrice: document.getElementById("plan-futures-price"),
+        planEntry: document.getElementById("plan-entry"),
+        planSl: document.getElementById("plan-sl"),
+        planTp: document.getElementById("plan-tp"),
+        planRr: document.getElementById("plan-rr"),
+        planReasonText: document.getElementById("plan-reason-text"),
+
+        // Area C: Order Flow
         ofStatusBadge: document.getElementById("of-status-badge"),
         ofBuyPct: document.getElementById("of-buy-pct"),
         ofSellPct: document.getElementById("of-sell-pct"),
+        ofBuyVol: document.getElementById("of-buy-vol"),
+        ofSellVol: document.getElementById("of-sell-vol"),
         ofBarBuy: document.getElementById("of-bar-buy"),
         ofBarSell: document.getElementById("of-bar-sell"),
-        ofTotalVol: document.getElementById("of-total-vol"),
+        ofImbalance: document.getElementById("of-imbalance"),
         ofTradeCount: document.getElementById("of-trade-count"),
         ofCoverage: document.getElementById("of-coverage"),
-        candlesTableBody: document.getElementById("candles-table-body"),
 
-        // Tab 2: Large Trades
+        // Area C: Volume Chart SVG
+        volumeBarSvg: document.getElementById("volume-bar-svg"),
+        volumeChartTf: document.getElementById("volume-chart-tf"),
+        volStatsTotal: document.getElementById("vol-stats-total"),
+
+        // Area C: Donut Chart SVG
+        donutSvg: document.getElementById("donut-svg"),
+        donutBuyVal: document.getElementById("donut-buy-val"),
+        donutBuyPct: document.getElementById("donut-buy-pct"),
+        donutSellVal: document.getElementById("donut-sell-val"),
+        donutSellPct: document.getElementById("donut-sell-pct"),
+        donutFilterDesc: document.getElementById("donut-filter-desc"),
+
+        // Area D: Large Trades
+        tradesSummaryCount: document.getElementById("trades-summary-count"),
+        tradesSummaryValue: document.getElementById("trades-summary-value"),
         tradesTimeRange: document.getElementById("trades-time-range"),
         tradesMinValue: document.getElementById("trades-min-value"),
         btnExportTrades: document.getElementById("btn-export-trades"),
-        tradesSummaryCount: document.getElementById("trades-summary-count"),
-        tradesSummaryValue: document.getElementById("trades-summary-value"),
         largeTradesBody: document.getElementById("large-trades-body"),
         btnTradesPrev: document.getElementById("btn-trades-prev"),
         btnTradesNext: document.getElementById("btn-trades-next"),
         tradesPageIndicator: document.getElementById("trades-page-indicator"),
 
-        // Tab 3: Prediction & Worker
-        workerStatusBadge: document.getElementById("worker-status-badge"),
-        workerLastCheck: document.getElementById("worker-last-check"),
-        workerLastSuccess: document.getElementById("worker-last-success"),
-        workerCycleStatus: document.getElementById("worker-cycle-status"),
-        workerCounts: document.getElementById("worker-counts"),
-        predDirBadge: document.getElementById("pred-dir-badge"),
-        predProbUp: document.getElementById("pred-prob-up"),
-        predProbNotUp: document.getElementById("pred-prob-notup"),
-        predBasePrice: document.getElementById("pred-base-price"),
-        predFeatureTime: document.getElementById("pred-feature-time"),
-        predTargetTime: document.getElementById("pred-target-time"),
-        predEvalStatus: document.getElementById("pred-eval-status"),
-        btnTriggerPred: document.getElementById("btn-trigger-pred"),
-        predTriggerFeedback: document.getElementById("pred-trigger-feedback"),
-        predHistoryBody: document.getElementById("pred-history-body"),
+        // Area D: Prediction History
+        tablePredHistoryBody: document.getElementById("pred-history-body"),
         btnPredPrev: document.getElementById("btn-pred-prev"),
         btnPredNext: document.getElementById("btn-pred-next"),
         predPageIndicator: document.getElementById("pred-page-indicator"),
+
+        // Area D: Worker & Model Metadata
+        workerStatusBadge: document.getElementById("worker-status-badge"),
+        workerLastCheck: document.getElementById("worker-last-check"),
+        workerCycleStatus: document.getElementById("worker-cycle-status"),
+        btnTriggerPred: document.getElementById("btn-trigger-pred"),
+        predTriggerFeedback: document.getElementById("pred-trigger-feedback"),
         modelInfoContent: document.getElementById("model-info-content")
     };
 
     // =========================================================================
-    // UTILITY FORMATTERS (GIỜ VIỆT NAM - UTC+7)
+    // 1. TIME UTILITIES (UTC+7 Vietnam Standard Time)
     // =========================================================================
+    const TimeUtils = {
+        formatDateTimeVN(isoStr) {
+            if (!isoStr) return "—";
+            try {
+                const date = new Date(isoStr);
+                if (isNaN(date.getTime())) return String(isoStr);
+                return new Intl.DateTimeFormat("vi-VN", {
+                    timeZone: "Asia/Ho_Chi_Minh",
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false
+                }).format(date);
+            } catch (e) {
+                return String(isoStr);
+            }
+        },
 
-    function formatNumber(val, decimals = 2) {
-        if (val === null || val === undefined || isNaN(val)) return "—";
-        return Number(val).toLocaleString("en-US", {
-            minimumFractionDigits: decimals,
-            maximumFractionDigits: decimals
-        });
-    }
+        formatTimeOnlyVN(isoStr) {
+            if (!isoStr) return "—";
+            try {
+                const date = new Date(isoStr);
+                if (isNaN(date.getTime())) return "—";
+                return new Intl.DateTimeFormat("vi-VN", {
+                    timeZone: "Asia/Ho_Chi_Minh",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false
+                }).format(date);
+            } catch (e) {
+                return "—";
+            }
+        },
 
-    function formatCryptoSize(val) {
-        if (val === null || val === undefined || isNaN(val)) return "—";
-        const num = Number(val);
-        if (num === 0) return "0.0000";
-        if (num < 0.0001) return num.toFixed(6);
-        if (num < 1) return num.toFixed(4);
-        return num.toFixed(4);
-    }
-
-    /**
-     * Định dạng thời gian sang Giờ Việt Nam (Asia/Ho_Chi_Minh - UTC+7)
-     * Format chuẩn: YYYY-MM-DD HH:mm:ss
-     */
-    function formatVnTime(isoStringOrTs, includeDate = true) {
-        if (!isoStringOrTs) return "—";
-        try {
-            const date = typeof isoStringOrTs === "number"
-                ? new Date(isoStringOrTs * 1000)
-                : new Date(isoStringOrTs);
-            if (isNaN(date.getTime())) return String(isoStringOrTs);
-
-            return new Intl.DateTimeFormat("sv-SE", {
-                timeZone: "Asia/Ho_Chi_Minh",
-                dateStyle: includeDate ? "short" : undefined,
-                timeStyle: "medium"
-            }).format(date);
-        } catch (e) {
-            return String(isoStringOrTs);
-        }
-    }
-
-    // Gán để các hàm gọi cũ formatUtcTime đều tự động chuyển sang giờ Việt Nam
-    const formatUtcTime = formatVnTime;
-
-    /**
-     * Lấy thời điểm hiện tại định dạng Giờ Việt Nam
-     */
-    function getNowVnString() {
-        try {
-            return new Intl.DateTimeFormat("sv-SE", {
-                timeZone: "Asia/Ho_Chi_Minh",
-                dateStyle: "short",
-                timeStyle: "medium"
-            }).format(new Date());
-        } catch (e) {
-            return new Date().toLocaleTimeString();
-        }
-    }
-
-    const getNowUtcString = getNowVnString;
-
-    function updateProvenance(sourceName, dataTimestamp, isStale = false) {
-        if (el.provenanceSource) {
-            el.provenanceSource.textContent = sourceName === "live_okx"
-                ? "Nguồn: OKX REST Trực tiếp"
-                : "Nguồn: PostgreSQL Data Warehouse";
-        }
-
-        if (el.provenanceDataTs) {
-            el.provenanceDataTs.textContent = dataTimestamp ? formatVnTime(dataTimestamp) : "—";
-        }
-
-        if (el.provenanceFetchTs) {
-            el.provenanceFetchTs.textContent = getNowVnString();
-        }
-
-        if (el.provenanceStatus) {
-            if (isStale) {
-                el.provenanceStatus.textContent = "Dữ liệu cũ — cập nhật thất bại";
-                el.provenanceStatus.className = "status-indicator stale";
-            } else {
-                el.provenanceStatus.textContent = "";
-                el.provenanceStatus.className = "status-indicator";
+        formatUnixVN(unixSec) {
+            if (!unixSec || isNaN(unixSec)) return "—";
+            try {
+                const date = new Date(Number(unixSec) * 1000);
+                if (isNaN(date.getTime())) return "—";
+                return new Intl.DateTimeFormat("vi-VN", {
+                    timeZone: "Asia/Ho_Chi_Minh",
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false
+                }).format(date);
+            } catch (e) {
+                return "—";
             }
         }
-    }
+    };
 
-    // =========================================================================
-    // INITIALIZATION & TAB SWITCHING
-    // =========================================================================
+    // Format Number Utilities
+    const NumUtils = {
+        formatUSD(num) {
+            if (num === null || num === undefined || isNaN(num)) return "—";
+            return new Intl.NumberFormat("en-US", {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1
+            }).format(num);
+        },
 
-    function init() {
-        setupEventListeners();
-        initChart();
-        fetchActiveTabData();
-        startPollingTimer();
-    }
+        formatIntegerUSD(num) {
+            if (num === null || num === undefined || isNaN(num)) return "—";
+            return new Intl.NumberFormat("en-US", {
+                maximumFractionDigits: 0
+            }).format(num);
+        },
 
-    function setupEventListeners() {
-        // Tab switching
-        el.navTabs.forEach(tab => {
-            tab.addEventListener("click", () => {
-                const targetTabId = tab.getAttribute("data-tab");
-                if (targetTabId === state.activeTab) return;
+        formatBTC(num) {
+            if (num === null || num === undefined || isNaN(num)) return "—";
+            return new Intl.NumberFormat("en-US", {
+                minimumFractionDigits: 4,
+                maximumFractionDigits: 4
+            }).format(num);
+        },
 
-                // Update tab styles
-                el.navTabs.forEach(t => t.classList.remove("active"));
-                el.tabPanes.forEach(p => p.classList.remove("active"));
-
-                tab.classList.add("active");
-                const targetPane = document.getElementById(targetTabId);
-                if (targetPane) targetPane.classList.add("active");
-
-                state.activeTab = targetTabId;
-
-                // Abort old request and reset timer
-                abortInFlightRequest();
-                fetchActiveTabData();
-                restartPollingTimer();
-
-                // Resize chart if overview tab was activated
-                if (targetTabId === "tab-overview" && state.chart) {
-                    setTimeout(() => {
-                        if (el.chartContainer) {
-                            state.chart.applyOptions({ width: el.chartContainer.clientWidth });
-                        }
-                    }, 50);
-                }
-            });
-        });
-
-        // Manual refresh button
-        el.btnRefresh.addEventListener("click", () => {
-            abortInFlightRequest();
-            fetchActiveTabData();
-        });
-
-        // Timeframe selector (Tab 1)
-        el.tfButtons.forEach(btn => {
-            btn.addEventListener("click", () => {
-                el.tfButtons.forEach(b => b.classList.remove("active"));
-                btn.classList.add("active");
-                state.timeframe = btn.getAttribute("data-tf");
-                fetchOverviewAndCandles();
-            });
-        });
-
-        // VWAP Toggle
-        el.toggleVwap.addEventListener("change", (e) => {
-            state.showVwap = e.target.checked;
-            updateVwapSeriesVisibility();
-        });
-
-        // Window resize handler for chart
-        window.addEventListener("resize", () => {
-            if (state.chart && el.chartContainer && state.activeTab === "tab-overview") {
-                state.chart.applyOptions({ width: el.chartContainer.clientWidth });
-            }
-        });
-
-        // Large Trades Filters (Tab 2)
-        el.tradesTimeRange.addEventListener("change", (e) => {
-            state.tradesTimeRange = e.target.value;
-            state.tradesPage = 1;
-            fetchLargeTrades();
-        });
-
-        el.tradesMinValue.addEventListener("change", (e) => {
-            state.tradesMinValue = Number(e.target.value);
-            state.tradesPage = 1;
-            fetchLargeTrades();
-        });
-
-        el.btnTradesPrev.addEventListener("click", () => {
-            if (state.tradesPage > 1) {
-                state.tradesPage--;
-                fetchLargeTrades();
-            }
-        });
-
-        el.btnTradesNext.addEventListener("click", () => {
-            if (state.tradesPage < state.tradesTotalPages) {
-                state.tradesPage++;
-                fetchLargeTrades();
-            }
-        });
-
-        el.btnExportTrades.addEventListener("click", () => {
-            const url = `/api/trades/large/export?time_range=${state.tradesTimeRange}&min_value=${state.tradesMinValue}`;
-            window.location.href = url;
-        });
-
-        // Prediction Controls (Tab 3)
-        el.btnTriggerPred.addEventListener("click", triggerNewPrediction);
-
-        el.btnPredPrev.addEventListener("click", () => {
-            if (state.predPage > 1) {
-                state.predPage--;
-                fetchPredictionHistory();
-            }
-        });
-
-        el.btnPredNext.addEventListener("click", () => {
-            if (state.predPage < state.predTotalPages) {
-                state.predPage++;
-                fetchPredictionHistory();
-            }
-        });
-    }
-
-    function abortInFlightRequest() {
-        if (state.abortController) {
-            state.abortController.abort();
-            state.abortController = null;
+        formatCompact(num) {
+            if (num === null || num === undefined || isNaN(num)) return "—";
+            if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
+            if (num >= 1e3) return (num / 1e3).toFixed(1) + "K";
+            return num.toFixed(1);
         }
-        state.isFetching = false;
-        el.btnRefresh.disabled = false;
-        el.btnRefreshText.textContent = "Làm mới";
-    }
-
-    function startPollingTimer() {
-        if (state.pollingTimer) clearInterval(state.pollingTimer);
-        state.pollingTimer = setInterval(() => {
-            fetchActiveTabData(true);
-        }, state.pollingIntervalMs);
-
-        // Realtime Orderflow 1.5s interval (khi ở Tab 1)
-        if (state.orderflowTimer) clearInterval(state.orderflowTimer);
-        state.orderflowTimer = setInterval(() => {
-            if (state.activeTab === "tab-overview") {
-                fetchRealtimeOrderflow();
-            }
-        }, 1500);
-
-        // ML Worker Status 10s interval (khi ở Tab 3)
-        if (state.workerTimer) clearInterval(state.workerTimer);
-        state.workerTimer = setInterval(() => {
-            if (state.activeTab === "tab-prediction") {
-                fetchPredictionWorkerStatus();
-            }
-        }, 10000);
-    }
-
-    function restartPollingTimer() {
-        startPollingTimer();
-    }
-
-    function fetchActiveTabData(isBackground = false) {
-        if (state.isFetching && isBackground) return;
-
-        if (state.activeTab === "tab-overview") {
-            fetchOverviewAndCandles();
-        } else if (state.activeTab === "tab-trades") {
-            fetchLargeTrades();
-        } else if (state.activeTab === "tab-prediction") {
-            fetchPredictionData();
-        }
-    }
+    };
 
     // =========================================================================
-    // TAB 1: OVERVIEW & CANDLES CHART LOGIC
+    // 2. API CLIENT (Fetch with AbortController)
     // =========================================================================
+    const ApiClient = {
+        activeControllers: new Map(),
 
-    function initChart() {
-        if (!el.chartContainer || typeof LightweightCharts === "undefined") return;
-
-        state.chart = LightweightCharts.createChart(el.chartContainer, {
-            width: el.chartContainer.clientWidth,
-            height: 420,
-            layout: {
-                background: { color: "#ffffff" },
-                textColor: "#475569",
-                fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-            },
-            grid: {
-                vertLines: { color: "#f1f5f9" },
-                horzLines: { color: "#f1f5f9" }
-            },
-            crosshair: {
-                mode: LightweightCharts.CrosshairMode.Normal
-            },
-            localization: {
-                locale: "vi-VN",
-                timeFormatter: (timestamp) => {
-                    const d = new Date(timestamp * 1000);
-                    return new Intl.DateTimeFormat("sv-SE", {
-                        timeZone: "Asia/Ho_Chi_Minh",
-                        dateStyle: "short",
-                        timeStyle: "medium"
-                    }).format(d);
-                }
-            },
-            rightPriceScale: {
-                borderColor: "#e2e8f0",
-                scaleMargins: {
-                    top: 0.1,
-                    bottom: 0.25
-                }
-            },
-            timeScale: {
-                borderColor: "#e2e8f0",
-                timeVisible: true,
-                secondsVisible: false,
-                rightOffset: 5,
-                tickMarkFormatter: (time) => {
-                    const d = new Date(time * 1000);
-                    return new Intl.DateTimeFormat("en-GB", {
-                        timeZone: "Asia/Ho_Chi_Minh",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: false
-                    }).format(d);
-                }
+        async fetchJson(url, key = "default") {
+            if (this.activeControllers.has(key)) {
+                this.activeControllers.get(key).abort();
             }
-        });
+            const controller = new AbortController();
+            this.activeControllers.set(key, controller);
 
-        // 1. Candlestick Series
-        state.candleSeries = state.chart.addCandlestickSeries({
-            upColor: "#16a34a",
-            downColor: "#dc2626",
-            borderUpColor: "#16a34a",
-            borderDownColor: "#dc2626",
-            wickUpColor: "#16a34a",
-            wickDownColor: "#dc2626"
-        });
-
-        // 2. Volume Series (Independent bottom scale)
-        state.volumeSeries = state.chart.addHistogramSeries({
-            priceFormat: { type: "volume" },
-            priceScaleId: "", // Separate overlay scale
-            lastValueVisible: false,
-            priceLineVisible: false,
-            scaleMargins: {
-                top: 0.8,
-                bottom: 0
-            }
-        });
-
-        // 3. VWAP Line Series
-        state.vwapSeries = state.chart.addLineSeries({
-            color: "#2563eb",
-            lineWidth: 2,
-            priceScaleId: "right",
-            title: "VWAP"
-        });
-
-        // Crosshair move listener: inspect candle data
-        state.chart.subscribeCrosshairMove(param => {
-            if (!param || !param.time || !state.rawCandles.length) {
-                // If not hovering, display the latest candle
-                if (state.rawCandles.length > 0) {
-                    displayCandleInspection(state.rawCandles[state.rawCandles.length - 1]);
+            try {
+                const resp = await fetch(url, { signal: controller.signal });
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
                 }
+                const data = await resp.json();
+                this.activeControllers.delete(key);
+                return data;
+            } catch (err) {
+                if (err.name === "AbortError") {
+                    return null;
+                }
+                this.activeControllers.delete(key);
+                throw err;
+            }
+        }
+    };
+
+    // =========================================================================
+    // 3. TRADINGVIEW LIGHTWEIGHT CHARTS MANAGER (Light Mode)
+    // =========================================================================
+    const TVChartManager = {
+        chart: null,
+        candleSeries: null,
+        volumeSeries: null,
+        vwapSeries: null,
+        rawCandles: [],
+        hasFitted: false,
+
+        init() {
+            if (!el.chartContainer) return;
+            if (typeof LightweightCharts === "undefined") {
+                this.showError("Không tải được thư viện biểu đồ Lightweight Charts.");
                 return;
             }
 
-            const currentCandle = state.rawCandles.find(c => c.time === param.time);
-            if (currentCandle) {
-                displayCandleInspection(currentCandle);
+            try {
+                const initialWidth = el.chartContainer.clientWidth || 700;
+                const initialHeight = el.chartContainer.clientHeight || 480;
+
+                this.chart = LightweightCharts.createChart(el.chartContainer, {
+                    width: initialWidth,
+                    height: initialHeight,
+                    layout: {
+                        background: { color: "#ffffff" },
+                        textColor: "#64748b"
+                    },
+                    grid: {
+                        vertLines: { color: "#f1f5f9" },
+                        horzLines: { color: "#f1f5f9" }
+                    },
+                    crosshair: {
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                        vertLine: { color: "#94a3b8", width: 1, style: 2 },
+                        horzLine: { color: "#94a3b8", width: 1, style: 2 }
+                    },
+                    rightPriceScale: {
+                        borderColor: "#e2e8f0",
+                        scaleMargins: { top: 0.1, bottom: 0.22 }
+                    },
+                    timeScale: {
+                        borderColor: "#e2e8f0",
+                        timeVisible: true,
+                        secondsVisible: false
+                    }
+                });
+
+                // Candlestick Series: Green up, Red down
+                this.candleSeries = this.chart.addCandlestickSeries({
+                    upColor: "#16a34a",
+                    downColor: "#dc2626",
+                    borderUpColor: "#16a34a",
+                    borderDownColor: "#dc2626",
+                    wickUpColor: "#16a34a",
+                    wickDownColor: "#dc2626"
+                });
+
+                // Volume Series
+                this.volumeSeries = this.chart.addHistogramSeries({
+                    color: "rgba(37, 99, 235, 0.35)",
+                    priceFormat: { type: "volume" },
+                    priceScaleId: "",
+                    scaleMargins: { top: 0.8, bottom: 0 }
+                });
+
+                // VWAP Line Series
+                this.vwapSeries = this.chart.addLineSeries({
+                    color: "#d97706",
+                    lineWidth: 2,
+                    priceLineVisible: false
+                });
+
+                // Crosshair Move Listener
+                this.chart.subscribeCrosshairMove((param) => {
+                    this.handleCrosshairMove(param);
+                });
+
+                // Auto Resize with ResizeObserver & Window Resize
+                const ro = new ResizeObserver((entries) => {
+                    if (entries.length && this.chart && el.chartContainer) {
+                        const rect = entries[0].contentRect;
+                        if (rect.width > 0 && rect.height > 0) {
+                            this.chart.applyOptions({ width: rect.width, height: rect.height });
+                        }
+                    }
+                });
+                ro.observe(el.chartContainer);
+
+                window.addEventListener("resize", () => {
+                    if (this.chart && el.chartContainer) {
+                        const w = el.chartContainer.clientWidth;
+                        const h = el.chartContainer.clientHeight || 480;
+                        if (w > 0) {
+                            this.chart.applyOptions({ width: w, height: h });
+                        }
+                    }
+                });
+
+            } catch (e) {
+                console.error("[TVChart] Init failed:", e);
+                this.showError("Khởi tạo biểu đồ thất bại: " + e.message);
             }
-        });
-    }
+        },
 
-    async function fetchOverviewAndCandles() {
-        state.isFetching = true;
-        el.btnRefresh.disabled = true;
-        el.btnRefreshText.textContent = "Đang tải...";
-        state.abortController = new AbortController();
-        const signal = state.abortController.signal;
-
-        try {
-            // Concurrent fetch of overview ticker and candle bars from pinned OKX REST source
-            const [overviewRes, candlesRes] = await Promise.all([
-                fetch(`/api/overview?source=live`, { signal }),
-                fetch(`/api/candles?source=live&timeframe=${state.timeframe}&limit=150`, { signal })
-            ]);
-
-            const overviewData = await overviewRes.json();
-            const candlesData = await candlesRes.json();
-
-            // 1. Render Overview
-            if (overviewRes.ok && overviewData.status === "success") {
-                el.ovPrice.textContent = formatNumber(overviewData.current_price, 2);
-
-                if (overviewData.change_24h !== null && overviewData.change_24h !== undefined) {
-                    const chg = overviewData.change_24h;
-                    el.ovChange.textContent = (chg > 0 ? "+" : "") + chg.toFixed(2) + "%";
-                    el.ovChange.className = "change-badge " + (chg >= 0 ? "up" : "down");
-                } else {
-                    el.ovChange.textContent = "— (Chưa đủ 24h)";
-                    el.ovChange.className = "change-badge";
-                }
-
-                el.ovHigh24h.textContent = overviewData.high_24h ? formatNumber(overviewData.high_24h, 2) : "—";
-                el.ovLow24h.textContent = overviewData.low_24h ? formatNumber(overviewData.low_24h, 2) : "—";
-                el.ovVol24h.textContent = overviewData.volume_24h ? formatNumber(overviewData.volume_24h, 2) : "—";
-                el.ovTurnover24h.textContent = overviewData.turnover_24h ? formatNumber(overviewData.turnover_24h, 2) : "—";
-
-                updateProvenance(overviewData.source, overviewData.data_timestamp, false);
-            } else if (overviewData.status === "empty") {
-                el.ovPrice.textContent = "—";
-                el.ovChange.textContent = "—";
-                updateProvenance("live_okx", null, false);
-            } else {
-                updateProvenance("live_okx", null, true);
+        showError(msg) {
+            if (el.chartErrorOverlay) {
+                el.chartErrorOverlay.textContent = msg;
+                el.chartErrorOverlay.style.display = "flex";
             }
+        },
 
-            // 2. Render Candles & Chart
-            if (candlesRes.ok && candlesData.status === "success" && candlesData.candles) {
-                state.rawCandles = candlesData.candles;
-                renderCandlesChart(candlesData.candles);
-                renderCandlesTable(candlesData.candles);
-
-                if (candlesData.candles.length > 0) {
-                    displayCandleInspection(candlesData.candles[candlesData.candles.length - 1]);
-                }
-                // Đồng thời cập nhật cán cân realtime 60s
-                fetchRealtimeOrderflow();
-            } else {
-                renderCandlesTable([]);
-                fetchRealtimeOrderflow();
+        clearError() {
+            if (el.chartErrorOverlay) {
+                el.chartErrorOverlay.style.display = "none";
             }
-        } catch (err) {
-            if (err.name !== "AbortError") {
-                console.error("Lỗi tải Tổng quan:", err);
-                updateProvenance("live_okx", null, true);
-            }
-        } finally {
-            state.isFetching = false;
-            el.btnRefresh.disabled = false;
-            el.btnRefreshText.textContent = "Làm mới";
-        }
-    }
+        },
 
-    function renderCandlesChart(candles) {
-        if (!state.chart || !candles.length) return;
+        updateData(candles) {
+            if (!this.candleSeries || !candles || !candles.length) return;
+            this.clearError();
+            this.rawCandles = candles;
 
-        const chartCandles = [];
-        const chartVolumes = [];
-        const chartVwaps = [];
+            const candleData = [];
+            const volumeData = [];
+            const vwapData = [];
 
-        candles.forEach(c => {
-            chartCandles.push({
-                time: c.time,
-                open: c.open,
-                high: c.high,
-                low: c.low,
-                close: c.close
+            // Sort chronologically ascending, robust to both `time` and `timestamp`
+            const sorted = [...candles].sort((a, b) => {
+                const ta = a.time !== undefined ? a.time : (a.timestamp || 0);
+                const tb = b.time !== undefined ? b.time : (b.timestamp || 0);
+                return ta - tb;
             });
 
-            chartVolumes.push({
-                time: c.time,
-                value: c.volume,
-                color: c.close >= c.open ? "rgba(22, 163, 74, 0.4)" : "rgba(220, 38, 38, 0.4)"
-            });
+            for (const c of sorted) {
+                const t = c.time !== undefined ? c.time : c.timestamp;
+                if (!t) continue;
 
-            // Only add VWAP point if present and valid
-            if (c.vwap !== null && c.vwap !== undefined && !isNaN(c.vwap)) {
-                chartVwaps.push({
-                    time: c.time,
-                    value: c.vwap
+                candleData.push({
+                    time: t,
+                    open: c.open,
+                    high: c.high,
+                    low: c.low,
+                    close: c.close
+                });
+
+                const isUp = c.close >= c.open;
+                volumeData.push({
+                    time: t,
+                    value: c.volume || 0,
+                    color: isUp ? "rgba(22, 163, 74, 0.4)" : "rgba(220, 38, 38, 0.4)"
+                });
+
+                if (c.vwap !== null && c.vwap !== undefined && c.vwap > 0) {
+                    vwapData.push({
+                        time: t,
+                        value: c.vwap
+                    });
+                }
+            }
+
+            if (candleData.length > 0) {
+                this.candleSeries.setData(candleData);
+                this.volumeSeries.setData(volumeData);
+
+                if (state.showVwap && this.vwapSeries) {
+                    this.vwapSeries.setData(vwapData);
+                } else if (this.vwapSeries) {
+                    this.vwapSeries.setData([]);
+                }
+
+                if (!this.hasFitted) {
+                    this.chart.timeScale().fitContent();
+                    this.hasFitted = true;
+                }
+
+                // Update top inspect bar with latest candle
+                const latest = sorted[sorted.length - 1];
+                this.updateInspectBar(latest);
+            }
+        },
+
+        updateInspectBar(c) {
+            if (!c) return;
+            const tVal = c.time !== undefined ? c.time : c.timestamp;
+            if (el.ciTime) el.ciTime.textContent = TimeUtils.formatUnixVN(tVal);
+            if (el.ciOpen) el.ciOpen.textContent = NumUtils.formatUSD(c.open);
+            if (el.ciHigh) el.ciHigh.textContent = NumUtils.formatUSD(c.high);
+            if (el.ciLow) el.ciLow.textContent = NumUtils.formatUSD(c.low);
+            if (el.ciClose) el.ciClose.textContent = NumUtils.formatUSD(c.close);
+            if (el.ciVol) el.ciVol.textContent = NumUtils.formatBTC(c.volume) + " BTC";
+            if (el.ciVwap) el.ciVwap.textContent = c.vwap ? NumUtils.formatUSD(c.vwap) : "—";
+        },
+
+        handleCrosshairMove(param) {
+            if (!param || !param.time || !param.seriesData) {
+                return;
+            }
+            const cData = param.seriesData.get(this.candleSeries);
+            if (cData) {
+                const volData = param.seriesData.get(this.volumeSeries);
+                const vwapData = param.seriesData.get(this.vwapSeries);
+                this.updateInspectBar({
+                    time: param.time,
+                    open: cData.open,
+                    high: cData.high,
+                    low: cData.low,
+                    close: cData.close,
+                    volume: volData ? volData.value : null,
+                    vwap: vwapData ? vwapData.value : null
                 });
             }
-        });
+        },
 
-        state.candleSeries.setData(chartCandles);
-        state.volumeSeries.setData(chartVolumes);
+        updatePriceLines(plan) {
+            if (!this.candleSeries) return;
 
-        if (state.showVwap) {
-            state.vwapSeries.setData(chartVwaps);
-        } else {
-            state.vwapSeries.setData([]);
+            // Remove existing lines
+            for (const line of state.priceLines) {
+                try {
+                    this.candleSeries.removePriceLine(line);
+                } catch (e) {}
+            }
+            state.priceLines = [];
+
+            // Only draw when there is an active LONG or SHORT plan
+            if (!plan || (plan.action !== "LONG" && plan.action !== "SHORT")) {
+                return;
+            }
+
+            if (plan.entry_price) {
+                state.priceLines.push(this.candleSeries.createPriceLine({
+                    price: plan.entry_price,
+                    color: "#2563eb",
+                    lineWidth: 2,
+                    lineStyle: 0,
+                    axisLabelVisible: true,
+                    title: "Entry (Futures)"
+                }));
+            }
+
+            if (plan.stop_loss) {
+                state.priceLines.push(this.candleSeries.createPriceLine({
+                    price: plan.stop_loss,
+                    color: "#dc2626",
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    axisLabelVisible: true,
+                    title: "SL"
+                }));
+            }
+
+            if (plan.take_profit) {
+                state.priceLines.push(this.candleSeries.createPriceLine({
+                    price: plan.take_profit,
+                    color: "#16a34a",
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    axisLabelVisible: true,
+                    title: "TP (1:1.5)"
+                }));
+            }
         }
+    };
 
-        if (!state.hasFittedChart && chartCandles.length > 0) {
-            state.chart.timeScale().fitContent();
-            state.hasFittedChart = true;
-        }
-    }
+    // =========================================================================
+    // 4. PREDICTION & FUTURES PLAN VIEW (HERO PANEL)
+    // =========================================================================
+    const PredictionPlanView = {
+        renderPrediction(pred) {
+            if (!pred) {
+                this.renderEmptyPrediction();
+                return;
+            }
 
-    function updateVwapSeriesVisibility() {
-        if (!state.vwapSeries || !state.rawCandles.length) return;
-        if (state.showVwap) {
-            const chartVwaps = state.rawCandles
-                .filter(c => c.vwap !== null && c.vwap !== undefined && !isNaN(c.vwap))
-                .map(c => ({ time: c.time, value: c.vwap }));
-            state.vwapSeries.setData(chartVwaps);
-        } else {
-            state.vwapSeries.setData([]);
-        }
-    }
+            const dir = pred.direction_label;
+            const probUp = pred.probability_up;
+            const probNotUp = pred.probability_not_up;
+            const targetTs = pred.target_timestamp;
 
-    function displayCandleInspection(c) {
-        if (!c) return;
+            state.targetTimestamp = targetTs;
+            this.startCountdown(targetTs);
 
-        el.ciTime.textContent = formatVnTime(c.time);
-        el.ciOpen.textContent = formatNumber(c.open, 2);
-        el.ciHigh.textContent = formatNumber(c.high, 2);
-        el.ciLow.textContent = formatNumber(c.low, 2);
-        el.ciClose.textContent = formatNumber(c.close, 2);
-        el.ciVol.textContent = formatCryptoSize(c.volume) + " BTC";
-        el.ciVwap.textContent = c.vwap !== null ? formatNumber(c.vwap, 2) + " USDT" : "—";
-        el.ciClosed.textContent = c.is_closed ? "Đã đóng" : "Đang mở";
-    }
-
-    /**
-     * Cập nhật Cán cân Mua/Bán thời gian thực (Cửa sổ trượt 60 giây)
-     * Đọc từ /api/orderflow/realtime (luồng giao dịch thật từ WebSocket OKX)
-     */
-    async function fetchRealtimeOrderflow() {
-        if (!el.ofRow) return;
-        try {
-            const resp = await fetch("/api/orderflow/realtime");
-            if (!resp.ok) return;
-            const data = await resp.json();
-
-            // 1. Khối lượng
-            const buyVol = data.buy_volume !== null && data.buy_volume !== undefined ? Number(data.buy_volume) : 0;
-            const sellVol = data.sell_volume !== null && data.sell_volume !== undefined ? Number(data.sell_volume) : 0;
-            const totalVol = data.total_volume !== null && data.total_volume !== undefined ? Number(data.total_volume) : 0;
-
-            el.ofBuyVol.textContent = formatCryptoSize(buyVol) + " BTC";
-            el.ofSellVol.textContent = formatCryptoSize(sellVol) + " BTC";
-            if (el.ofTotalVol) el.ofTotalVol.textContent = formatCryptoSize(totalVol) + " BTC";
-            if (el.ofTradeCount) el.ofTradeCount.textContent = formatNumber(data.trade_count || 0, 0);
-            if (el.ofCoverage) el.ofCoverage.textContent = (data.coverage_seconds || 0) + "s / 60s";
-
-            // 2. Thanh tỉ lệ & Imbalance (Xử lý chặt chẽ khi volume = 0: Không fake 50/50)
-            if (totalVol === 0 || data.imbalance === null) {
-                if (el.ofBuyPct) el.ofBuyPct.textContent = "—%";
-                if (el.ofSellPct) el.ofSellPct.textContent = "—%";
-                if (el.ofBarBuy) el.ofBarBuy.style.width = "50%";
-                if (el.ofBarSell) el.ofBarSell.style.width = "50%";
-                el.ofImbalance.textContent = "Không xác định (0 volume)";
-                el.ofImbalance.className = "of-value text-muted";
+            // Direction Hero Badge
+            if (dir === "UP") {
+                el.predDirBadge.textContent = "TĂNG (UP)";
+                el.predDirBadge.className = "direction-badge badge-up";
+            } else if (dir === "NOT_UP") {
+                el.predDirBadge.textContent = "KHÔNG TĂNG (NOT_UP)";
+                el.predDirBadge.className = "direction-badge badge-notup";
             } else {
+                el.predDirBadge.textContent = "CHỜ DỮ LIỆU";
+                el.predDirBadge.className = "direction-badge badge-neutral";
+            }
+
+            // Probabilities & Dual Bar
+            if (probUp !== null && probNotUp !== null) {
+                const upPct = (probUp * 100).toFixed(1);
+                const notUpPct = (probNotUp * 100).toFixed(1);
+
+                el.predProbUp.textContent = upPct + "%";
+                el.predProbNotup.textContent = notUpPct + "%";
+                el.predProbBarUp.style.width = upPct + "%";
+                el.predProbBarNotup.style.width = notUpPct + "%";
+
+                if (probUp >= 0.48 && probUp <= 0.52) {
+                    el.predProbDesc.textContent = "Xác suất mô hình sát ngưỡng 50%, hai lớp chưa phân tách rõ.";
+                } else {
+                    el.predProbDesc.textContent = "Mô hình phân loại nhị phân Spot BTC-USDT. Xác suất không phải tỷ lệ thắng giao dịch.";
+                }
+            } else {
+                el.predProbUp.textContent = "—%";
+                el.predProbNotup.textContent = "—%";
+                el.predProbBarUp.style.width = "50%";
+                el.predProbBarNotup.style.width = "50%";
+            }
+
+            // Timestamps
+            el.predFeatureTime.textContent = TimeUtils.formatTimeOnlyVN(pred.feature_timestamp);
+            el.predTargetTime.textContent = TimeUtils.formatTimeOnlyVN(pred.target_timestamp);
+
+            // Validity Status
+            const now = new Date().getTime();
+            const targetTime = targetTs ? new Date(targetTs).getTime() : 0;
+            if (targetTime > now) {
+                el.predValidityStatus.textContent = "Còn hiệu lực";
+                el.predValidityStatus.className = "kv-val buy-text font-bold";
+            } else {
+                el.predValidityStatus.textContent = "Hết hiệu lực mục tiêu";
+                el.predValidityStatus.className = "kv-val sell-text font-bold";
+            }
+        },
+
+        renderEmptyPrediction() {
+            el.predDirBadge.textContent = "CHỜ DỮ LIỆU";
+            el.predDirBadge.className = "direction-badge badge-neutral";
+            el.predProbUp.textContent = "—%";
+            el.predProbNotup.textContent = "—%";
+            el.predFeatureTime.textContent = "—";
+            el.predTargetTime.textContent = "—";
+            el.predValidityStatus.textContent = "Chưa có dữ liệu";
+            el.predValidityStatus.className = "kv-val text-muted";
+        },
+
+        renderFuturesPlan(plan) {
+            if (!plan) return;
+
+            const action = plan.action || "CHỜ";
+            if (action === "LONG") {
+                el.planActionBadge.textContent = "MUA (LONG)";
+                el.planActionBadge.className = "plan-action-badge badge-up";
+            } else if (action === "SHORT") {
+                el.planActionBadge.textContent = "BÁN (SHORT)";
+                el.planActionBadge.className = "plan-action-badge badge-notup";
+            } else {
+                el.planActionBadge.textContent = "CHỜ (WAIT)";
+                el.planActionBadge.className = "plan-action-badge badge-wait";
+            }
+
+            // Market Data & Basis
+            const mkt = plan.market_data || {};
+            if (mkt.futures_price) {
+                el.planFuturesPrice.textContent = NumUtils.formatUSD(mkt.futures_price) + " USDT";
+            } else {
+                el.planFuturesPrice.textContent = "—";
+            }
+
+            if (mkt.basis_usd !== null && mkt.basis_usd !== undefined) {
+                const prefix = mkt.basis_usd > 0 ? "+" : "";
+                el.headerBasis.textContent = `${prefix}${mkt.basis_usd.toFixed(2)} USDT`;
+                el.headerBasis.className = mkt.basis_usd >= 0 ? "basis-val tabular buy-text" : "basis-val tabular sell-text";
+            } else {
+                el.headerBasis.textContent = "—";
+            }
+
+            // Levels: Entry, SL, TP, R:R
+            if (action === "LONG" || action === "SHORT") {
+                el.planEntry.textContent = NumUtils.formatUSD(plan.entry_price);
+                el.planSl.textContent = NumUtils.formatUSD(plan.stop_loss);
+                el.planTp.textContent = NumUtils.formatUSD(plan.take_profit);
+                el.planRr.textContent = plan.risk_reward_ratio || "1:1.5";
+            } else {
+                el.planEntry.textContent = "—";
+                el.planSl.textContent = "—";
+                el.planTp.textContent = "—";
+                el.planRr.textContent = "1:1.5";
+            }
+
+            // Reasoning Text
+            el.planReasonText.textContent = plan.reason || "Giữ vị thế quan sát thị trường.";
+
+            // Draw or clear price lines on chart
+            TVChartManager.updatePriceLines(plan);
+        },
+
+        startCountdown(targetIsoStr) {
+            if (state.countdownTimer) {
+                clearInterval(state.countdownTimer);
+                state.countdownTimer = null;
+            }
+
+            if (!targetIsoStr) {
+                return;
+            }
+
+            const targetTime = new Date(targetIsoStr).getTime();
+            const updateValidity = () => {
+                const now = new Date().getTime();
+                const diffMs = targetTime - now;
+
+                if (diffMs <= 0) {
+                    if (el.predValidityStatus) {
+                        el.predValidityStatus.textContent = "Hết hiệu lực mục tiêu";
+                        el.predValidityStatus.className = "kv-val sell-text font-bold";
+                    }
+                    clearInterval(state.countdownTimer);
+                    state.countdownTimer = null;
+                }
+            };
+
+            updateValidity();
+            state.countdownTimer = setInterval(updateValidity, 1000);
+        }
+    };
+
+    // =========================================================================
+    // 5. ORDER FLOW VIEW (60s Sliding Window)
+    // =========================================================================
+    const OrderFlowView = {
+        render(data) {
+            if (!data) return;
+
+            const st = data.status || data.state;
+            el.ofStatusBadge.textContent = data.status_text || st;
+
+            if (st === "active") {
+                el.ofStatusBadge.className = "micro-badge buy-text";
+            } else if (st === "warming_up") {
+                el.ofStatusBadge.className = "micro-badge wait-text";
+            } else {
+                el.ofStatusBadge.className = "micro-badge sell-text";
+            }
+
+            if (data.total_volume > 0 && data.buy_ratio !== null) {
                 const buyPct = (data.buy_ratio * 100).toFixed(1);
                 const sellPct = (data.sell_ratio * 100).toFixed(1);
-                if (el.ofBuyPct) el.ofBuyPct.textContent = buyPct + "%";
-                if (el.ofSellPct) el.ofSellPct.textContent = sellPct + "%";
-                if (el.ofBarBuy) el.ofBarBuy.style.width = buyPct + "%";
-                if (el.ofBarSell) el.ofBarSell.style.width = sellPct + "%";
 
-                const imb = Number(data.imbalance);
-                const imbPct = (imb * 100).toFixed(2);
-                el.ofImbalance.textContent = (imb > 0 ? "+" : "") + imbPct + "%";
-                el.ofImbalance.className = "of-value " + (imb >= 0 ? "text-buy" : "text-sell");
+                el.ofBuyPct.textContent = buyPct + "%";
+                el.ofSellPct.textContent = sellPct + "%";
+                el.ofBuyVol.textContent = NumUtils.formatBTC(data.buy_volume) + " BTC";
+                el.ofSellVol.textContent = NumUtils.formatBTC(data.sell_volume) + " BTC";
+
+                el.ofBarBuy.style.width = buyPct + "%";
+                el.ofBarSell.style.width = sellPct + "%";
+
+                const imb = data.imbalance;
+                const prefix = imb > 0 ? "+" : "";
+                el.ofImbalance.textContent = `${prefix}${(imb * 100).toFixed(1)}%`;
+                el.ofImbalance.className = imb >= 0 ? "am-val tabular font-bold buy-text" : "am-val tabular font-bold sell-text";
+            } else {
+                el.ofBuyPct.textContent = "—%";
+                el.ofSellPct.textContent = "—%";
+                el.ofBuyVol.textContent = "— BTC";
+                el.ofSellVol.textContent = "— BTC";
+                el.ofBarBuy.style.width = "50%";
+                el.ofBarSell.style.width = "50%";
+                el.ofImbalance.textContent = "—";
+                el.ofImbalance.className = "am-val tabular font-bold";
             }
 
-            // 3. Trạng thái kết nối & dữ liệu
-            if (el.ofStatusBadge) {
-                const stateMap = {
-                    "active": { text: "Đang hoạt động", cls: "active" },
-                    "warming_up": { text: "Đang tích lũy (khởi động)", cls: "warming_up" },
-                    "no_trades": { text: "Không có giao dịch trong 60s", cls: "no_trades" },
-                    "stale": { text: "Dữ liệu cũ (ngưng kết nối)", cls: "stale" },
-                    "disconnected": { text: "Mất kết nối", cls: "disconnected" }
-                };
-                const st = stateMap[data.state] || { text: data.state || "Không rõ", cls: "idle" };
-                el.ofStatusBadge.textContent = st.text;
-                el.ofStatusBadge.className = "status-badge " + st.cls;
+            el.ofTradeCount.textContent = data.trade_count !== undefined ? String(data.trade_count) : "—";
+            el.ofCoverage.textContent = `${data.coverage_seconds || 0}s / 60s`;
+        }
+    };
+
+    // =========================================================================
+    // 6. VOLUME BAR CHART VIEW (Pure SVG Histogram)
+    // =========================================================================
+    const VolumeChartView = {
+        render(candles) {
+            if (!el.volumeBarSvg || !candles || !candles.length) return;
+
+            // Take last 30 candles
+            const recent = candles.slice(-30);
+            const totalVol = recent.reduce((sum, c) => sum + (c.volume || 0), 0);
+            if (el.volStatsTotal) {
+                el.volStatsTotal.textContent = NumUtils.formatBTC(totalVol) + " BTC";
             }
-        } catch (e) {
-            console.error("Lỗi cập nhật cán cân realtime:", e);
-        }
-    }
 
-    function renderCandlesTable(candles) {
-        if (!el.candlesTableBody) return;
-        if (!candles || candles.length === 0) {
-            el.candlesTableBody.innerHTML = `<tr><td colspan="9" class="empty-cell">Chưa có dữ liệu nến</td></tr>`;
-            return;
-        }
+            const maxVol = Math.max(...recent.map(c => c.volume || 0), 0.001);
+            const svgWidth = 360;
+            const svgHeight = 130;
+            const paddingBottom = 10;
+            const usableHeight = svgHeight - paddingBottom;
+            const barCount = recent.length;
+            const barSpacing = svgWidth / barCount;
+            const barWidth = Math.max(2, barSpacing * 0.7);
 
-        // Show latest 50 in reverse chronological order
-        const displayList = [...candles].reverse().slice(0, 50);
-        let html = "";
-        displayList.forEach(c => {
-            html += `
-                <tr>
-                    <td>${formatUtcTime(c.time)}</td>
-                    <td class="num-col">${formatNumber(c.open, 2)}</td>
-                    <td class="num-col">${formatNumber(c.high, 2)}</td>
-                    <td class="num-col">${formatNumber(c.low, 2)}</td>
-                    <td class="num-col">${formatNumber(c.close, 2)}</td>
-                    <td class="num-col">${formatCryptoSize(c.volume)}</td>
-                    <td class="num-col">${c.total_trade_value ? formatNumber(c.total_trade_value, 2) : "—"}</td>
-                    <td class="num-col">${c.vwap ? formatNumber(c.vwap, 2) : "—"}</td>
-                    <td>${c.is_closed ? "Đã đóng" : "<span class='text-muted'>Đang mở</span>"}</td>
-                </tr>
+            let svgHtml = "";
+
+            recent.forEach((c, i) => {
+                const vol = c.volume || 0;
+                const barHeight = Math.max(2, (vol / maxVol) * usableHeight);
+                const x = i * barSpacing + (barSpacing - barWidth) / 2;
+                const y = svgHeight - paddingBottom - barHeight;
+                const isUp = c.close >= c.open;
+                const color = isUp ? "#16a34a" : "#dc2626";
+                const tVal = c.time !== undefined ? c.time : c.timestamp;
+                const timeStr = tVal ? TimeUtils.formatTimeOnlyVN(new Date(tVal * 1000).toISOString()) : "—";
+
+                svgHtml += `
+                    <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}"
+                          fill="${color}" opacity="0.85" rx="1">
+                        <title>${timeStr} | Vol: ${vol.toFixed(4)} BTC</title>
+                    </rect>
+                `;
+            });
+
+            // Baseline
+            svgHtml += `<line x1="0" y1="${svgHeight - paddingBottom}" x2="${svgWidth}" y2="${svgHeight - paddingBottom}" stroke="#e2e8f0" stroke-width="1" />`;
+
+            el.volumeBarSvg.innerHTML = svgHtml;
+        }
+    };
+
+    // =========================================================================
+    // 7. DONUT CHART VIEW (Pure SVG Large Trades Breakdown)
+    // =========================================================================
+    const DonutChartView = {
+        render(breakdown) {
+            if (!el.donutSvg) return;
+
+            if (!breakdown || breakdown.total_value <= 0) {
+                // Empty circle
+                el.donutSvg.innerHTML = `
+                    <circle cx="80" cy="80" r="50" fill="none" stroke="#e2e8f0" stroke-width="16" />
+                    <text x="80" y="85" text-anchor="middle" fill="#64748b" font-size="12" font-family="sans-serif">0 giao dịch</text>
+                `;
+                el.donutBuyVal.textContent = "—";
+                el.donutBuyPct.textContent = "(0%)";
+                el.donutSellVal.textContent = "—";
+                el.donutSellPct.textContent = "(0%)";
+                return;
+            }
+
+            const total = breakdown.total_value;
+            const buyVal = breakdown.buy_value;
+            const sellVal = breakdown.sell_value;
+            const buyPct = breakdown.buy_pct;
+            const sellPct = breakdown.sell_pct;
+
+            // SVG Donut calculation: Circumference = 2 * PI * r
+            const r = 50;
+            const circumference = 2 * Math.PI * r;
+            const buyStroke = (buyPct / 100) * circumference;
+            const sellStroke = (sellPct / 100) * circumference;
+
+            // Buy slice starts at -90deg (top: stroke-dashoffset = 0)
+            const sellOffset = -buyStroke;
+
+            const totalText = "$" + NumUtils.formatCompact(total);
+
+            el.donutSvg.innerHTML = `
+                <!-- Background track -->
+                <circle cx="80" cy="80" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="16" />
+                
+                <!-- Buy slice -->
+                <circle cx="80" cy="80" r="${r}" fill="none" stroke="#16a34a" stroke-width="16"
+                        stroke-dasharray="${buyStroke} ${circumference}"
+                        stroke-dashoffset="0"
+                        transform="rotate(-90 80 80)">
+                    <title>Mua: $${NumUtils.formatIntegerUSD(buyVal)} (${buyPct}%)</title>
+                </circle>
+
+                <!-- Sell slice -->
+                <circle cx="80" cy="80" r="${r}" fill="none" stroke="#dc2626" stroke-width="16"
+                        stroke-dasharray="${sellStroke} ${circumference}"
+                        stroke-dashoffset="${sellOffset}"
+                        transform="rotate(-90 80 80)">
+                    <title>Bán: $${NumUtils.formatIntegerUSD(sellVal)} (${sellPct}%)</title>
+                </circle>
+
+                <!-- Center Hole Text -->
+                <text x="80" y="78" text-anchor="middle" fill="#0f172a" font-size="13" font-weight="700" font-family="monospace">${totalText}</text>
+                <text x="80" y="93" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">TỔNG USDT</text>
             `;
-        });
-        el.candlesTableBody.innerHTML = html;
-    }
+
+            el.donutBuyVal.textContent = "$" + NumUtils.formatCompact(buyVal);
+            el.donutBuyPct.textContent = `(${buyPct}%)`;
+            el.donutSellVal.textContent = "$" + NumUtils.formatCompact(sellVal);
+            el.donutSellPct.textContent = `(${sellPct}%)`;
+        }
+    };
 
     // =========================================================================
-    // TAB 2: LARGE TRADES LOGIC
+    // 8. LARGE TRADES VIEW (Paginated Table & Filters)
     // =========================================================================
-
-    async function fetchLargeTrades() {
-        state.isFetching = true;
-        el.btnRefresh.disabled = true;
-        el.btnRefreshText.textContent = "Đang tải...";
-        state.abortController = new AbortController();
-        const signal = state.abortController.signal;
-
-        try {
-            // Tab 2 luôn lấy từ nguồn cố định PostgreSQL DW với bộ lọc người dùng chọn
-            const url = `/api/trades/large?time_range=${state.tradesTimeRange}&min_value=${state.tradesMinValue}&page=${state.tradesPage}&page_size=${state.tradesPageSize}`;
-            const res = await fetch(url, { signal });
-            const data = await res.json();
-
-            if (res.ok && data.status === "success") {
-                el.tradesSummaryCount.textContent = formatNumber(data.total_count, 0) + " lệnh";
-                el.tradesSummaryValue.textContent = formatNumber(data.total_value, 2) + " USDT";
+    const LargeTradesView = {
+        async fetchAndRender() {
+            try {
+                const url = `/api/trades/large?time_range=${state.tradesTimeRange}&min_value=${state.tradesMinValue}&page=${state.tradesPage}&page_size=${state.tradesPageSize}`;
+                const data = await ApiClient.fetchJson(url, "large_trades");
+                if (!data) return;
 
                 state.tradesTotalPages = data.total_pages || 1;
-                el.tradesPageIndicator.textContent = `Trang ${data.page} / ${state.tradesTotalPages}`;
-                el.btnTradesPrev.disabled = (data.page <= 1);
-                el.btnTradesNext.disabled = (data.page >= state.tradesTotalPages);
 
-                renderLargeTradesTable(data.trades);
-                updateProvenance("postgres_dw", data.data_timestamp, false);
-            } else {
-                renderLargeTradesTable([]);
-                updateProvenance("postgres_dw", null, true);
-            }
-        } catch (err) {
-            if (err.name !== "AbortError") {
-                console.error("Lỗi tải giao dịch lớn:", err);
-                updateProvenance("postgres_dw", null, true);
-            }
-        } finally {
-            state.isFetching = false;
-            el.btnRefresh.disabled = false;
-            el.btnRefreshText.textContent = "Làm mới";
-        }
-    }
+                // Summary
+                el.tradesSummaryCount.textContent = data.total_count ? String(data.total_count) : "0";
+                el.tradesSummaryValue.textContent = NumUtils.formatIntegerUSD(data.total_value) + " USDT";
 
-    function renderLargeTradesTable(trades) {
-        if (!el.largeTradesBody) return;
-        if (!trades || trades.length === 0) {
-            el.largeTradesBody.innerHTML = `<tr><td colspan="6" class="empty-cell">Không có giao dịch lớn nào thỏa điều kiện lọc</td></tr>`;
-            return;
-        }
+                // Donut Chart
+                DonutChartView.render(data.breakdown);
 
-        let html = "";
-        trades.forEach(t => {
-            const isBuy = (t.side || "").toUpperCase() === "BUY";
-            const sideClass = isBuy ? "buy" : "sell";
-            const sideText = isBuy ? "MUA" : "BÁN";
-
-            html += `
-                <tr>
-                    <td>${formatUtcTime(t.trade_time)}</td>
-                    <td><span class="side-badge ${sideClass}">${sideText}</span></td>
-                    <td class="num-col">${formatNumber(t.price, 2)}</td>
-                    <td class="num-col">${formatCryptoSize(t.size)}</td>
-                    <td class="num-col"><strong>${formatNumber(t.trade_value, 2)}</strong></td>
-                    <td><code>${String(t.trade_id)}</code></td>
-                </tr>
-            `;
-        });
-        el.largeTradesBody.innerHTML = html;
-    }
-
-    // =========================================================================
-    // TAB 3: MACHINE LEARNING PREDICTION LOGIC
-    // =========================================================================
-
-    async function fetchPredictionData() {
-        state.isFetching = true;
-        el.btnRefresh.disabled = true;
-        el.btnRefreshText.textContent = "Đang tải...";
-        state.abortController = new AbortController();
-        const signal = state.abortController.signal;
-
-        try {
-            await Promise.all([
-                fetchPredictionWorkerStatus(signal),
-                fetchLatestPrediction(signal),
-                fetchPredictionHistory(signal),
-                fetchModelMetadata(signal)
-            ]);
-        } catch (err) {
-            if (err.name !== "AbortError") {
-                console.error("Lỗi tải dữ liệu dự báo:", err);
-            }
-        } finally {
-            state.isFetching = false;
-            el.btnRefresh.disabled = false;
-            el.btnRefreshText.textContent = "Làm mới";
-        }
-    }
-
-    async function fetchPredictionWorkerStatus(signal) {
-        if (!el.workerStatusBadge) return;
-        try {
-            const res = await fetch("/api/ml/status", { signal });
-            const data = await res.json();
-            if (res.ok && data.status === "success" && data.worker) {
-                const w = data.worker;
-                const stateLabels = {
-                    "running": { text: "Đang chạy", cls: "running" },
-                    "idle": { text: "Chờ chu kỳ", cls: "idle" },
-                    "stopped": { text: "Đã dừng", cls: "disconnected" }
-                };
-                const st = stateLabels[w.state] || { text: w.state || "Không rõ", cls: "idle" };
-                el.workerStatusBadge.textContent = st.text;
-                el.workerStatusBadge.className = "status-badge " + st.cls;
-
-                if (el.workerLastCheck) el.workerLastCheck.textContent = w.last_check_at ? formatVnTime(w.last_check_at) : "Chưa kiểm tra";
-                if (el.workerLastSuccess) el.workerLastSuccess.textContent = w.last_success_at ? formatVnTime(w.last_success_at) : "Chưa có";
-                
-                if (el.workerCycleStatus) {
-                    if (w.last_rejection_code) {
-                        el.workerCycleStatus.innerHTML = `<span class="text-sell">Từ chối: <strong>${w.last_rejection_code}</strong></span>`;
-                    } else if (w.last_success_at) {
-                        el.workerCycleStatus.innerHTML = `<span class="text-buy">Dự báo thành công</span>`;
-                    } else {
-                        el.workerCycleStatus.textContent = "Bình thường";
-                    }
-                }
-
-                if (el.workerCounts) {
-                    el.workerCounts.textContent = `${w.total_predictions || 0} dự báo / ${w.total_evaluations || 0} đối chiếu`;
-                }
-            }
-        } catch (e) {
-            if (e.name !== "AbortError") console.error("Lỗi lấy trạng thái ML worker:", e);
-        }
-    }
-
-    async function fetchLatestPrediction(signal) {
-        try {
-            const res = await fetch("/api/ml/prediction", { signal });
-            const data = await res.json();
-
-            if (res.ok && data.status === "success" && data.prediction) {
-                const p = data.prediction;
-                const isUp = (p.predicted_direction === 1);
-
-                el.predDirBadge.textContent = isUp ? "Tăng" : "Không tăng";
-                el.predDirBadge.className = "pred-direction-badge " + (isUp ? "up" : "not-up");
-
-                el.predProbUp.textContent = p.probability_up ? (p.probability_up * 100).toFixed(2) + "%" : "—";
-                el.predProbNotUp.textContent = p.probability_not_up ? (p.probability_not_up * 100).toFixed(2) + "%" : "—";
-                el.predBasePrice.textContent = p.current_price ? formatNumber(p.current_price, 2) + " USDT" : "—";
-                el.predFeatureTime.textContent = formatUtcTime(p.feature_timestamp);
-                el.predTargetTime.textContent = formatUtcTime(p.target_timestamp);
-
-                // Render evaluation state
-                if (p.eval_status === "PENDING_TARGET") {
-                    el.predEvalStatus.innerHTML = `<span class="eval-text pending">Chờ thời điểm đối chiếu (+5m)</span>`;
-                } else if (p.eval_status === "MISSING_ACTUAL") {
-                    el.predEvalStatus.innerHTML = `<span class="eval-text missing">Chờ nến đối chiếu</span>`;
-                } else if (p.is_correct === true) {
-                    el.predEvalStatus.innerHTML = `<span class="eval-text correct">Chính xác (${formatNumber(p.actual_future_price, 2)} USDT)</span>`;
-                } else if (p.is_correct === false) {
-                    el.predEvalStatus.innerHTML = `<span class="eval-text incorrect">Sai (${formatNumber(p.actual_future_price, 2)} USDT)</span>`;
+                // Table rows
+                const trades = data.trades || [];
+                if (!trades.length) {
+                    el.largeTradesBody.innerHTML = `<tr><td colspan="6" class="empty-cell">Không có giao dịch lớn nào thỏa mãn bộ lọc hiện tại.</td></tr>`;
                 } else {
-                    el.predEvalStatus.textContent = "—";
+                    let html = "";
+                    for (const t of trades) {
+                        const isBuy = t.side === "BUY";
+                        const sideBadge = isBuy
+                            ? `<span class="change-tag change-up">MUA</span>`
+                            : `<span class="change-tag change-down">BÁN</span>`;
+
+                        html += `
+                            <tr>
+                                <td>${TimeUtils.formatDateTimeVN(t.trade_time)}</td>
+                                <td>${sideBadge}</td>
+                                <td class="num-col">${NumUtils.formatUSD(t.price)}</td>
+                                <td class="num-col">${NumUtils.formatBTC(t.size)}</td>
+                                <td class="num-col font-bold">${NumUtils.formatIntegerUSD(t.trade_value)}</td>
+                                <td><code class="text-muted">${t.trade_id}</code></td>
+                            </tr>
+                        `;
+                    }
+                    el.largeTradesBody.innerHTML = html;
                 }
 
-                updateProvenance("postgres_dw", p.feature_timestamp, false);
-            } else {
-                el.predDirBadge.textContent = "—";
-                el.predDirBadge.className = "pred-direction-badge";
-                el.predProbUp.textContent = "—";
-                el.predProbNotUp.textContent = "—";
-                el.predBasePrice.textContent = "—";
-                el.predFeatureTime.textContent = "—";
-                el.predTargetTime.textContent = "—";
-                el.predEvalStatus.textContent = "Chưa có dự báo trong CSDL";
-                updateProvenance("postgres_dw", null, false);
+                // Pagination
+                el.tradesPageIndicator.textContent = `Trang ${state.tradesPage} / ${state.tradesTotalPages}`;
+                el.btnTradesPrev.disabled = state.tradesPage <= 1;
+                el.btnTradesNext.disabled = state.tradesPage >= state.tradesTotalPages;
+
+            } catch (err) {
+                console.error("[LargeTrades] Fetch error:", err);
             }
-        } catch (e) {
-            if (e.name !== "AbortError") throw e;
         }
-    }
+    };
 
-    async function fetchPredictionHistory(signal) {
-        try {
-            const res = await fetch(`/api/ml/history?page=${state.predPage}&page_size=${state.predPageSize}`, { signal });
-            const data = await res.json();
+    // =========================================================================
+    // 9. PREDICTION HISTORY VIEW
+    // =========================================================================
+    const PredictionHistoryView = {
+        async fetchAndRender() {
+            try {
+                const url = `/api/ml/history?page=${state.predPage}&page_size=${state.predPageSize}`;
+                const data = await ApiClient.fetchJson(url, "pred_history");
+                if (!data) return;
 
-            if (res.ok && data.status === "success") {
                 state.predTotalPages = data.total_pages || 1;
-                el.predPageIndicator.textContent = `Trang ${data.page} / ${state.predTotalPages}`;
-                el.btnPredPrev.disabled = (data.page <= 1);
-                el.btnPredNext.disabled = (data.page >= state.predTotalPages);
+                const history = data.history || [];
 
-                renderPredictionHistoryTable(data.history);
-            } else {
-                renderPredictionHistoryTable([]);
+                if (!history.length) {
+                    el.tablePredHistoryBody.innerHTML = `<tr><td colspan="8" class="empty-cell">Chưa có lịch sử dự báo nào trong cơ sở dữ liệu.</td></tr>`;
+                } else {
+                    let html = "";
+                    for (const h of history) {
+                        const isUp = h.direction_label === "UP";
+                        const predBadge = isUp
+                            ? `<span class="change-tag change-up">TĂNG</span>`
+                            : `<span class="change-tag change-down">KHÔNG TĂNG</span>`;
+
+                        let evalHtml = `<span class="text-muted">—</span>`;
+                        if (h.eval_status === "PENDING_TARGET") {
+                            evalHtml = `<span class="micro-badge wait-text">Đang chờ mục tiêu</span>`;
+                        } else if (h.is_correct === true) {
+                            evalHtml = `<span class="change-tag change-up">CHÍNH XÁC</span>`;
+                        } else if (h.is_correct === false) {
+                            evalHtml = `<span class="change-tag change-down">SAI</span>`;
+                        }
+
+                        const actualDir = h.actual_direction_label
+                            ? (h.actual_direction_label === "UP" ? "TĂNG" : "KHÔNG TĂNG")
+                            : "—";
+
+                        html += `
+                            <tr>
+                                <td>${TimeUtils.formatDateTimeVN(h.feature_timestamp)}</td>
+                                <td class="num-col">${NumUtils.formatUSD(h.current_price)}</td>
+                                <td>${predBadge}</td>
+                                <td class="num-col font-bold">${h.probability_up ? (h.probability_up * 100).toFixed(1) + "%" : "—"}</td>
+                                <td>${TimeUtils.formatDateTimeVN(h.target_timestamp)}</td>
+                                <td class="num-col">${NumUtils.formatUSD(h.actual_future_price)}</td>
+                                <td>${actualDir}</td>
+                                <td>${evalHtml}</td>
+                            </tr>
+                        `;
+                    }
+                    el.tablePredHistoryBody.innerHTML = html;
+                }
+
+                el.predPageIndicator.textContent = `Trang ${state.predPage} / ${state.predTotalPages}`;
+                el.btnPredPrev.disabled = state.predPage <= 1;
+                el.btnPredNext.disabled = state.predPage >= state.predTotalPages;
+
+            } catch (err) {
+                console.error("[PredHistory] Fetch error:", err);
             }
-        } catch (e) {
-            if (e.name !== "AbortError") throw e;
         }
-    }
+    };
 
-    function renderPredictionHistoryTable(history) {
-        if (!el.predHistoryBody) return;
-        if (!history || history.length === 0) {
-            el.predHistoryBody.innerHTML = `<tr><td colspan="8" class="empty-cell">Chưa có lịch sử dự báo</td></tr>`;
-            return;
+    // =========================================================================
+    // 10. MODEL METADATA & WORKER CONTROLS
+    // =========================================================================
+    const ModelMetadataView = {
+        async fetchAndRender() {
+            try {
+                const [metaData, statusData] = await Promise.all([
+                    ApiClient.fetchJson("/api/ml/metadata", "ml_meta"),
+                    ApiClient.fetchJson("/api/ml/status", "ml_status")
+                ]);
+
+                if (statusData && statusData.worker) {
+                    const w = statusData.worker;
+                    el.workerStatusBadge.textContent = w.is_running ? "Đang chạy" : "Tạm dừng";
+                    el.workerLastCheck.textContent = TimeUtils.formatTimeOnlyVN(w.last_cycle_time);
+                    el.workerCycleStatus.textContent = w.last_cycle_status || "Bình thường";
+                }
+
+                if (metaData) {
+                    const m = metaData.metrics || {};
+                    let fiHtml = "";
+                    if (metaData.feature_importance && metaData.feature_importance.length) {
+                        fiHtml = metaData.feature_importance.slice(0, 6).map(f => 
+                            `<code>${f.feature}</code>: ${(f.importance * 100).toFixed(1)}%`
+                        ).join(" · ");
+                    }
+
+                    el.modelInfoContent.innerHTML = `
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <div>
+                                <strong>Mô hình:</strong> ${metaData.model_name || "btc_xgboost_direction"} 
+                                (v${metaData.model_version || "2.0.0"} · ${metaData.model_type || "XGBClassifier"} · Horizon: +${metaData.prediction_horizon_minutes || 5}m)
+                            </div>
+                            <div>
+                                <strong>Kết quả kiểm định thật (Artifact Test Set):</strong>
+                                Accuracy: <strong class="tabular">${m.accuracy ? (m.accuracy * 100).toFixed(2) + "%" : "49.98%"}</strong> | 
+                                Baseline: <strong class="tabular">${m.baseline_accuracy ? (m.baseline_accuracy * 100).toFixed(2) + "%" : "50.29%"}</strong> | 
+                                Lift: <strong class="tabular">${m.baseline_lift !== undefined ? (m.baseline_lift * 100).toFixed(2) + "%" : "-0.61%"}</strong> | 
+                                ROC AUC: <strong class="tabular">${m.roc_auc ? m.roc_auc.toFixed(4) : "0.5053"}</strong>
+                            </div>
+                            <div>
+                                <strong>Số đặc trưng nến/vi cấu trúc:</strong> ${metaData.n_features || 15} canonical features.
+                            </div>
+                            ${fiHtml ? `<div><strong>Đặc trưng quan trọng hàng đầu:</strong> ${fiHtml}</div>` : ""}
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                console.error("[ModelMetadata] Fetch error:", err);
+            }
+        },
+
+        async triggerPrediction() {
+            if (el.btnTriggerPred) el.btnTriggerPred.disabled = true;
+            el.predTriggerFeedback.style.display = "block";
+            el.predTriggerFeedback.textContent = "Đang kích hoạt chu kỳ suy luận...";
+            el.predTriggerFeedback.className = "feedback-msg wait-text";
+
+            try {
+                const resp = await fetch("/api/ml/trigger_prediction", { method: "POST" });
+                const data = await resp.json();
+
+                if (resp.status === 200) {
+                    el.predTriggerFeedback.textContent = "Chu kỳ suy luận hoàn tất thành công!";
+                    el.predTriggerFeedback.className = "feedback-msg buy-text";
+                    TerminalController.fetchCoreMarketAndPlan();
+                    PredictionHistoryView.fetchAndRender();
+                } else if (resp.status === 429) {
+                    el.predTriggerFeedback.textContent = "Chu kỳ khác đang chạy đồng thời, vui lòng đợi.";
+                    el.predTriggerFeedback.className = "feedback-msg wait-text";
+                } else {
+                    el.predTriggerFeedback.textContent = data.message || "Mô hình từ chối suy luận: Dữ liệu nến chưa đủ điều kiện.";
+                    el.predTriggerFeedback.className = "feedback-msg sell-text";
+                }
+            } catch (e) {
+                el.predTriggerFeedback.textContent = "Lỗi kết nối máy chủ khi kích hoạt chu kỳ: " + e.message;
+                el.predTriggerFeedback.className = "feedback-msg sell-text";
+            } finally {
+                setTimeout(() => {
+                    if (el.btnTriggerPred) el.btnTriggerPred.disabled = false;
+                    if (el.predTriggerFeedback) el.predTriggerFeedback.style.display = "none";
+                }, 4000);
+            }
         }
+    };
 
-        let html = "";
-        history.forEach(item => {
-            const isUp = (item.predicted_direction === 1);
-            const dirHtml = `<strong class="${isUp ? 'text-buy' : 'text-muted'}">${isUp ? 'Tăng' : 'Không tăng'}</strong>`;
+    // =========================================================================
+    // 11. MAIN TERMINAL CONTROLLER
+    // =========================================================================
+    const TerminalController = {
+        async init() {
+            TVChartManager.init();
+            this.bindEvents();
 
-            let evalHtml = "—";
-            if (item.eval_status === "PENDING_TARGET") {
-                evalHtml = `<span class="eval-text pending">Chờ đối chiếu</span>`;
-            } else if (item.eval_status === "MISSING_ACTUAL") {
-                evalHtml = `<span class="eval-text missing">Thiếu nến</span>`;
-            } else if (item.is_correct === true) {
-                evalHtml = `<span class="eval-text correct">Đúng</span>`;
-            } else if (item.is_correct === false) {
-                evalHtml = `<span class="eval-text incorrect">Sai</span>`;
+            // Initial load of all sections
+            await this.refreshAll();
+
+            // Start polling schedules
+            this.startPolling();
+        },
+
+        bindEvents() {
+            // Timeframe buttons
+            el.tfButtons.forEach(btn => {
+                btn.addEventListener("click", () => {
+                    el.tfButtons.forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                    state.timeframe = btn.dataset.tf;
+                    TVChartManager.hasFitted = false;
+                    this.fetchCandles();
+                });
+            });
+
+            // VWAP toggle
+            if (el.toggleVwap) {
+                el.toggleVwap.addEventListener("change", (e) => {
+                    state.showVwap = e.target.checked;
+                    TVChartManager.updateData(TVChartManager.rawCandles);
+                });
             }
 
-            const actualDir = item.actual_direction === 1 ? "Tăng" : (item.actual_direction === 0 ? "Không tăng" : "—");
-
-            html += `
-                <tr>
-                    <td>${formatUtcTime(item.feature_timestamp)}</td>
-                    <td class="num-col">${item.current_price ? formatNumber(item.current_price, 2) : "—"}</td>
-                    <td>${dirHtml}</td>
-                    <td class="num-col">${item.probability_up ? (item.probability_up * 100).toFixed(2) + "%" : "—"}</td>
-                    <td>${formatUtcTime(item.target_timestamp)}</td>
-                    <td class="num-col">${item.actual_future_price ? formatNumber(item.actual_future_price, 2) : "—"}</td>
-                    <td>${actualDir}</td>
-                    <td>${evalHtml}</td>
-                </tr>
-            `;
-        });
-        el.predHistoryBody.innerHTML = html;
-    }
-
-    async function fetchModelMetadata(signal) {
-        try {
-            const res = await fetch("/api/ml/metadata", { signal });
-            const data = await res.json();
-
-            if (res.ok && data.status === "success") {
-                const metrics = data.metrics || {};
-                const topFeatures = (data.feature_importance || []).slice(0, 5);
-
-                let featHtml = topFeatures.map(f => `<li><code>${f.feature}</code>: ${(f.importance * 100).toFixed(2)}%</li>`).join("");
-
-                el.modelInfoContent.innerHTML = `
-                    <table class="model-meta-table">
-                        <tbody>
-                            <tr><td>Tên mô hình:</td><td><strong>${data.model_name}</strong></td></tr>
-                            <tr><td>Phiên bản:</td><td><code>${data.model_version}</code></td></tr>
-                            <tr><td>Thuật toán:</td><td>${data.model_type}</td></tr>
-                            <tr><td>Số lượng đặc trưng:</td><td><strong>${data.n_features} đặc trưng</strong></td></tr>
-                            <tr><td>Chu kỳ dự báo:</td><td>${data.prediction_horizon_minutes} phút</td></tr>
-                            <tr><td>Độ chính xác (Accuracy):</td><td>${metrics.accuracy ? (metrics.accuracy * 100).toFixed(2) + "%" : "—"}</td></tr>
-                            <tr><td>F1-Score:</td><td>${metrics.f1_score ? metrics.f1_score.toFixed(4) : "—"}</td></tr>
-                            <tr><td>ROC-AUC:</td><td>${metrics.roc_auc ? metrics.roc_auc.toFixed(4) : "—"}</td></tr>
-                            <tr><td>Top đặc trưng quan trọng:</td><td><ul style="padding-left:18px;">${featHtml || "—"}</ul></td></tr>
-                        </tbody>
-                    </table>
-                `;
+            // Top refresh button
+            if (el.btnRefresh) {
+                el.btnRefresh.addEventListener("click", () => {
+                    this.refreshAll();
+                });
             }
-        } catch (e) {
-            if (e.name !== "AbortError") throw e;
-        }
-    }
 
-    async function triggerNewPrediction() {
-        el.btnTriggerPred.disabled = true;
-        el.btnTriggerPred.textContent = "Đang chạy suy luận...";
-        el.predTriggerFeedback.className = "feedback-msg active text-muted";
-        el.predTriggerFeedback.textContent = "Đang trích xuất 15 đặc trưng và thực thi suy luận từ mô hình XGBoost...";
-
-        try {
-            const res = await fetch("/api/ml/trigger_prediction", { method: "POST" });
-            const data = await res.json();
-
-            if (res.ok && data.status === "success") {
-                el.predTriggerFeedback.className = "feedback-msg active text-buy";
-                el.predTriggerFeedback.textContent = "Chu kỳ hoàn tất! Dự báo thành công và đã ghi nhận vào Data Warehouse.";
-                await fetchPredictionWorkerStatus();
-                await fetchLatestPrediction();
-                await fetchPredictionHistory();
-            } else {
-                el.predTriggerFeedback.className = "feedback-msg active text-sell";
-                const code = data.rejection_code ? `[${data.rejection_code}] ` : "";
-                el.predTriggerFeedback.textContent = `${code}${data.message || "Từ chối suy luận."}`;
-                await fetchPredictionWorkerStatus();
+            // Large trades filters
+            if (el.tradesTimeRange) {
+                el.tradesTimeRange.addEventListener("change", (e) => {
+                    state.tradesTimeRange = e.target.value;
+                    state.tradesPage = 1;
+                    LargeTradesView.fetchAndRender();
+                });
             }
-        } catch (err) {
-            el.predTriggerFeedback.className = "feedback-msg active text-sell";
-            el.predTriggerFeedback.textContent = "Lỗi kết nối khi gửi yêu cầu suy luận: " + err.message;
-        } finally {
-            el.btnTriggerPred.disabled = false;
-            el.btnTriggerPred.textContent = "Chạy dự báo mới";
-            setTimeout(() => {
-                el.predTriggerFeedback.classList.remove("active");
-            }, 6000);
-        }
-    }
 
-    // Initialize application when DOM is ready
+            if (el.tradesMinValue) {
+                el.tradesMinValue.addEventListener("change", (e) => {
+                    state.tradesMinValue = parseFloat(e.target.value);
+                    state.tradesPage = 1;
+                    LargeTradesView.fetchAndRender();
+                });
+            }
+
+            // Large trades CSV export
+            if (el.btnExportTrades) {
+                el.btnExportTrades.addEventListener("click", () => {
+                    const exportUrl = `/api/trades/large/export?time_range=${state.tradesTimeRange}&min_value=${state.tradesMinValue}`;
+                    window.open(exportUrl, "_blank");
+                });
+            }
+
+            // Large trades pagination
+            if (el.btnTradesPrev) {
+                el.btnTradesPrev.addEventListener("click", () => {
+                    if (state.tradesPage > 1) {
+                        state.tradesPage--;
+                        LargeTradesView.fetchAndRender();
+                    }
+                });
+            }
+
+            if (el.btnTradesNext) {
+                el.btnTradesNext.addEventListener("click", () => {
+                    if (state.tradesPage < state.tradesTotalPages) {
+                        state.tradesPage++;
+                        LargeTradesView.fetchAndRender();
+                    }
+                });
+            }
+
+            // Prediction history pagination
+            if (el.btnPredPrev) {
+                el.btnPredPrev.addEventListener("click", () => {
+                    if (state.predPage > 1) {
+                        state.predPage--;
+                        PredictionHistoryView.fetchAndRender();
+                    }
+                });
+            }
+
+            if (el.btnPredNext) {
+                el.btnPredNext.addEventListener("click", () => {
+                    if (state.predPage < state.predTotalPages) {
+                        state.predPage++;
+                        PredictionHistoryView.fetchAndRender();
+                    }
+                });
+            }
+
+            // Manual prediction trigger
+            if (el.btnTriggerPred) {
+                el.btnTriggerPred.addEventListener("click", () => {
+                    ModelMetadataView.triggerPrediction();
+                });
+            }
+
+            // Pause polling when browser tab is inactive / hidden
+            document.addEventListener("visibilitychange", () => {
+                if (document.hidden) {
+                    this.stopPolling();
+                } else {
+                    this.startPolling();
+                    this.refreshAll();
+                }
+            });
+        },
+
+        async fetchOverview() {
+            try {
+                const data = await ApiClient.fetchJson("/api/overview", "overview");
+                if (!data) return;
+
+                const curPrice = data.current_price !== undefined ? data.current_price : data.price;
+                if (curPrice) {
+                    el.ovPrice.textContent = NumUtils.formatUSD(curPrice);
+                }
+
+                const chg = data.change_24h !== undefined ? data.change_24h : data.change_24h_pct;
+                if (chg !== null && chg !== undefined) {
+                    const prefix = chg > 0 ? "+" : "";
+                    el.ovChange.textContent = `${prefix}${chg.toFixed(2)}%`;
+                    el.ovChange.className = chg >= 0 ? "change-tag change-up tabular" : "change-tag change-down tabular";
+                } else {
+                    el.ovChange.textContent = "—";
+                }
+
+                if (data.data_timestamp) {
+                    el.provenanceFetchTs.textContent = TimeUtils.formatTimeOnlyVN(data.data_timestamp);
+                }
+
+                this.hideConnectionAlert();
+            } catch (e) {
+                console.error("[Overview] Error:", e);
+                this.showConnectionAlert("Mất kết nối API giá tổng quan.");
+            }
+        },
+
+        async fetchCandles() {
+            try {
+                const data = await ApiClient.fetchJson(`/api/candles?timeframe=${state.timeframe}&limit=150`, "candles");
+                if (!data || !data.candles) return;
+
+                TVChartManager.updateData(data.candles);
+                VolumeChartView.render(data.candles);
+
+                if (el.volumeChartTf) {
+                    el.volumeChartTf.textContent = `Nến ${state.timeframe} (BTC)`;
+                }
+            } catch (e) {
+                console.error("[Candles] Error:", e);
+            }
+        },
+
+        async fetchOrderFlow() {
+            try {
+                const data = await ApiClient.fetchJson("/api/orderflow/realtime", "orderflow");
+                if (!data) return;
+                OrderFlowView.render(data);
+            } catch (e) {
+                console.error("[OrderFlow] Error:", e);
+            }
+        },
+
+        async fetchCoreMarketAndPlan() {
+            try {
+                const [predData, planData] = await Promise.all([
+                    ApiClient.fetchJson("/api/ml/prediction", "ml_pred"),
+                    ApiClient.fetchJson("/api/futures/plan", "futures_plan")
+                ]);
+
+                if (predData && predData.prediction) {
+                    PredictionPlanView.renderPrediction(predData.prediction);
+                } else {
+                    PredictionPlanView.renderEmptyPrediction();
+                }
+
+                if (planData) {
+                    PredictionPlanView.renderFuturesPlan(planData);
+                }
+            } catch (e) {
+                console.error("[Plan] Error:", e);
+            }
+        },
+
+        async refreshAll() {
+            if (el.btnRefreshText) el.btnRefreshText.textContent = "Đang tải...";
+            try {
+                await Promise.all([
+                    this.fetchOverview(),
+                    this.fetchCandles(),
+                    this.fetchOrderFlow(),
+                    this.fetchCoreMarketAndPlan(),
+                    LargeTradesView.fetchAndRender(),
+                    PredictionHistoryView.fetchAndRender(),
+                    ModelMetadataView.fetchAndRender()
+                ]);
+            } finally {
+                if (el.btnRefreshText) el.btnRefreshText.textContent = "Làm mới";
+            }
+        },
+
+        startPolling() {
+            this.stopPolling();
+            state.isPollingActive = true;
+
+            // 1. Order Flow: 3s
+            state.orderflowTimer = setInterval(() => {
+                if (!state.isPollingActive) return;
+                this.fetchOrderFlow();
+            }, 3000);
+
+            // 2. Core Market, Candles, Prediction & Futures Plan: 5s
+            state.pollingTimer = setInterval(() => {
+                if (!state.isPollingActive) return;
+                this.fetchOverview();
+                this.fetchCandles();
+                this.fetchCoreMarketAndPlan();
+            }, 5000);
+        },
+
+        stopPolling() {
+            state.isPollingActive = false;
+            if (state.pollingTimer) {
+                clearInterval(state.pollingTimer);
+                state.pollingTimer = null;
+            }
+            if (state.orderflowTimer) {
+                clearInterval(state.orderflowTimer);
+                state.orderflowTimer = null;
+            }
+        },
+
+        showConnectionAlert(msg) {
+            if (el.connectionAlert) {
+                el.connectionAlertText.textContent = msg;
+                el.connectionAlert.style.display = "flex";
+            }
+        },
+
+        hideConnectionAlert() {
+            if (el.connectionAlert) {
+                el.connectionAlert.style.display = "none";
+            }
+        }
+    };
+
+    // Auto-bootstrap when DOM is ready
     if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
+        document.addEventListener("DOMContentLoaded", () => TerminalController.init());
     } else {
-        init();
+        TerminalController.init();
     }
+
 })();

@@ -1,368 +1,415 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BTC-USDT Analytics</title>
+    <title>BTC Trading Terminal — Dự báo & Kế hoạch Futures</title>
     <!-- TradingView Lightweight Charts -->
     <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="/static/css/styles.css">
 </head>
-<body>
-    <div class="app-layout">
-        <!-- TOP APP HEADER -->
-        <header class="app-header">
+
+<body class="theme-light theme-terminal">
+    <div class="terminal-container">
+
+        <!-- AREA A: HEADER -->
+        <header class="terminal-header">
             <div class="header-left">
-                <h1 class="app-title">BTC-USDT Analytics</h1>
-                <div class="provenance-line" id="provenance-info">
-                    <span>Cập nhật: <span id="provenance-fetch-ts">—</span> <small class="tz-label">(Giờ VN - UTC+7)</small></span>
-                    <span id="provenance-status" class="status-indicator"></span>
+                <div class="instrument-title">
+                    <span class="ticker-symbol">BTC</span>
+                    <span class="ticker-type">Spot (BTC-USDT) & Perpetual (BTC-USDT-SWAP)</span>
+                </div>
+                <div class="header-prices">
+                    <div class="price-block">
+                        <span class="price-val tabular" id="ov-price">—</span>
+                        <span class="price-currency">USDT</span>
+                        <span class="change-tag tabular" id="ov-change">—</span>
+                    </div>
+                    <div class="basis-block" id="futures-basis-wrap"
+                        title="Độ lệch giữa giá Hợp đồng phái sinh và giá Giao ngay (Perpetual - Spot)">
+                        <span class="meta-label">Basis:</span>
+                        <span class="basis-val tabular" id="header-basis">—</span>
+                    </div>
                 </div>
             </div>
+
             <div class="header-right">
-                <button id="btn-refresh" class="btn btn-secondary">
+                <div class="timestamp-block">
+                    <span class="meta-label">Dữ liệu:</span>
+                    <span class="time-val tabular" id="provenance-fetch-ts">—</span>
+                </div>
+                <button id="btn-refresh" class="btn btn-refresh" title="Làm mới toàn bộ dữ liệu">
                     <span id="btn-refresh-text">Làm mới</span>
                 </button>
             </div>
         </header>
 
-        <!-- MAIN NAVIGATION TABS (3 TABS ONLY) -->
-        <nav class="nav-tabs">
-            <button class="nav-tab active" data-tab="tab-overview">Tổng quan</button>
-            <button class="nav-tab" data-tab="tab-trades">Giao dịch lớn</button>
-            <button class="nav-tab" data-tab="tab-prediction">Dự báo</button>
-        </nav>
+        <!-- CONNECTION ISSUE BANNER (Only displayed when there is a real issue) -->
+        <div class="alert-banner" id="connection-alert" style="display: none;">
+            <span class="alert-icon">!</span>
+            <span class="alert-text" id="connection-alert-text">Đang kết nối lại nguồn dữ liệu...</span>
+        </div>
 
-        <!-- APP CONTENT AREA -->
-        <main class="app-main">
-            <!-- ========================================================= -->
-            <!-- TAB 1: TỔNG QUAN                                          -->
-            <!-- ========================================================= -->
-            <section class="tab-pane active" id="tab-overview">
-                <!-- Top Price & 24h Ticker Summary -->
-                <div class="price-banner">
-                    <div class="price-primary">
-                        <span class="price-val" id="ov-price">—</span>
-                        <span class="price-unit">USDT</span>
-                        <span class="change-badge" id="ov-change">—</span>
-                    </div>
-                    <div class="stats-row">
-                        <div class="stat-item">
-                            <span class="stat-label">24h Cao:</span>
-                            <span class="stat-val" id="ov-high-24h">—</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">24h Thấp:</span>
-                            <span class="stat-val" id="ov-low-24h">—</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">24h Khối lượng:</span>
-                            <span class="stat-val" id="ov-vol-24h">—</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">24h Giá trị:</span>
-                            <span class="stat-val" id="ov-turnover-24h">—</span>
-                        </div>
-                    </div>
-                </div>
+        <!-- AREA B: MAIN WORKSPACE (Desktop: ~65% Chart, ~35% Prediction & Futures Plan) -->
+        <section class="main-workspace-grid">
 
-                <!-- Chart Controls Bar -->
-                <div class="chart-toolbar">
-                    <div class="toolbar-left">
-                        <span class="toolbar-label">Khung thời gian:</span>
-                        <div class="tf-buttons">
-                            <button class="tf-btn active" data-tf="1m">1 phút</button>
-                            <button class="tf-btn" data-tf="1h">1 giờ</button>
-                            <button class="tf-btn" data-tf="1d">1 ngày</button>
-                        </div>
+            <!-- LEFT COLUMN: TRADINGVIEW CHART -->
+            <div class="chart-panel card">
+                <div class="chart-header-bar">
+                    <div class="timeframe-group">
+                        <button class="tf-btn active" data-tf="1m">1 phút</button>
+                        <button class="tf-btn" data-tf="1h">1 giờ</button>
+                        <button class="tf-btn" data-tf="1d">1 ngày</button>
                     </div>
-                    <div class="toolbar-right">
-                        <span class="source-tag">Nguồn: OKX REST Trực tiếp</span>
-                        <label class="checkbox-label">
+                    <div class="chart-options">
+                        <label class="toggle-control">
                             <input type="checkbox" id="toggle-vwap" checked>
-                            <span>Đường VWAP</span>
+                            <span>VWAP</span>
                         </label>
                     </div>
                 </div>
 
-                <!-- Selected Candle Single-Line Summary -->
+                <!-- Single-Line Crosshair Inspect Bar -->
                 <div class="candle-inspect-bar" id="candle-inspect-bar">
-                    <span class="ci-item"><strong>Thời gian:</strong> <span id="ci-time">—</span></span>
+                    <span class="ci-item"><span class="ci-label">Thời gian:</span> <span class="tabular"
+                            id="ci-time">—</span></span>
                     <span class="ci-sep">|</span>
-                    <span class="ci-item"><strong>Mở:</strong> <span id="ci-open">—</span></span>
+                    <span class="ci-item"><span class="ci-label">O:</span> <span class="tabular"
+                            id="ci-open">—</span></span>
+                    <span class="ci-item"><span class="ci-label">H:</span> <span class="tabular"
+                            id="ci-high">—</span></span>
+                    <span class="ci-item"><span class="ci-label">L:</span> <span class="tabular"
+                            id="ci-low">—</span></span>
+                    <span class="ci-item"><span class="ci-label">C:</span> <span class="tabular"
+                            id="ci-close">—</span></span>
                     <span class="ci-sep">|</span>
-                    <span class="ci-item"><strong>Cao:</strong> <span id="ci-high">—</span></span>
-                    <span class="ci-sep">|</span>
-                    <span class="ci-item"><strong>Thấp:</strong> <span id="ci-low">—</span></span>
-                    <span class="ci-sep">|</span>
-                    <span class="ci-item"><strong>Đóng:</strong> <span id="ci-close">—</span></span>
-                    <span class="ci-sep">|</span>
-                    <span class="ci-item"><strong>Khối lượng:</strong> <span id="ci-vol">—</span></span>
-                    <span class="ci-sep">|</span>
-                    <span class="ci-item"><strong>VWAP:</strong> <span id="ci-vwap">—</span></span>
-                    <span class="ci-sep">|</span>
-                    <span class="ci-item"><strong>Trạng thái:</strong> <span id="ci-closed">—</span></span>
+                    <span class="ci-item"><span class="ci-label">Vol:</span> <span class="tabular"
+                            id="ci-vol">—</span></span>
+                    <span class="ci-item"><span class="ci-label">VWAP:</span> <span class="tabular"
+                            id="ci-vwap">—</span></span>
                 </div>
 
-                <!-- Candlestick & Volume Chart -->
-                <div class="chart-wrapper">
-                    <div id="tv-chart" class="tv-chart-container"></div>
+                <div class="tv-chart-wrapper" id="tv-chart-wrapper">
+                    <div id="tv-chart" class="tv-chart-inner"></div>
+                    <div id="chart-error-overlay" class="chart-overlay-msg" style="display: none;"></div>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN: PREDICTION & FUTURES PLAN (HERO PANEL) -->
+            <div class="hero-panel card">
+
+                <!-- 1. Prediction Block -->
+                <div class="hero-subcard prediction-subcard">
+                    <div class="card-title-row">
+                        <h2 class="subcard-title">Dự báo hướng giá (+5 phút)</h2>
+                    </div>
+
+                    <!-- Direction Hero Box -->
+                    <div class="direction-badge-container">
+                        <div class="direction-badge badge-neutral" id="pred-dir-badge">CHỜ DỮ LIỆU</div>
+                        <div class="direction-subnote">NOT_UP bao gồm xu hướng giảm hoặc đi ngang tích lũy.</div>
+                    </div>
+
+                    <!-- Probability Bars & Values -->
+                    <div class="prob-container">
+                        <div class="prob-values-row">
+                            <span class="prob-label buy-text">P(UP): <strong class="tabular"
+                                    id="pred-prob-up">—%</strong></span>
+                            <span class="prob-label sell-text">P(NOT_UP): <strong class="tabular"
+                                    id="pred-prob-notup">—%</strong></span>
+                        </div>
+                        <div class="prob-track">
+                            <div class="prob-fill-up" id="pred-prob-bar-up" style="width: 50%;"></div>
+                            <div class="prob-fill-notup" id="pred-prob-bar-notup" style="width: 50%;"></div>
+                        </div>
+                        <div class="prob-footnote" id="pred-prob-desc">Mô hình phân loại nhị phân Spot BTC-USDT. Xác
+                            suất không phải tỷ lệ thắng giao dịch.</div>
+                    </div>
+
+                    <!-- Timestamps & Status Details -->
+                    <div class="meta-keyvalues">
+                        <div class="kv-item">
+                            <span class="kv-label">Nến đầu vào:</span>
+                            <span class="kv-val tabular" id="pred-feature-time">—</span>
+                        </div>
+                        <div class="kv-item">
+                            <span class="kv-label">Mục tiêu (+5m):</span>
+                            <span class="kv-val tabular" id="pred-target-time">—</span>
+                        </div>
+                        <div class="kv-item">
+                            <span class="kv-label">Trạng thái:</span>
+                            <span class="kv-val tabular" id="pred-validity-status">—</span>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Order Flow Pressure Section: Realtime 60s -->
-                <div class="panel-box orderflow-panel">
-                    <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <h3 class="panel-title" style="margin: 0;">Cán cân mua/bán — 60 giây gần nhất</h3>
-                            <small class="text-muted">Nguồn: OKX WebSocket Realtime (giao dịch khớp 60 giây gần nhất)</small>
-                        </div>
-                        <span class="status-badge" id="of-status-badge">Đang kết nối...</span>
+                <!-- 2. Futures Plan Block -->
+                <div class="hero-subcard futures-subcard">
+                    <div class="card-title-row">
+                        <h2 class="subcard-title">Kế hoạch giao dịch Futures</h2>
+                        <span class="instrument-tag">BTC-USDT-SWAP</span>
                     </div>
 
-                    <!-- Visual Buy / Sell Ratio Bar -->
-                    <div class="ratio-bar-wrapper">
-                        <div class="ratio-labels">
-                            <span class="ratio-label-buy">Mua: <strong id="of-buy-pct">—%</strong> (<span id="of-buy-vol">— BTC</span>)</span>
-                            <span class="ratio-label-sell">Bán: <strong id="of-sell-pct">—%</strong> (<span id="of-sell-vol">— BTC</span>)</span>
-                        </div>
-                        <div class="ratio-bar-track">
-                            <div class="ratio-bar-buy" id="of-bar-buy" style="width: 50%;"></div>
-                            <div class="ratio-bar-sell" id="of-bar-sell" style="width: 50%;"></div>
+                    <div class="plan-action-row">
+                        <div class="plan-action-badge badge-neutral" id="plan-action-badge">CHỜ</div>
+                        <div class="plan-basis-info">
+                            <span class="kv-label">Giá HĐ Futures:</span>
+                            <span class="tabular font-bold" id="plan-futures-price">— USDT</span>
                         </div>
                     </div>
 
-                    <div class="orderflow-metrics-row" id="orderflow-row">
-                        <div class="of-metric">
-                            <span class="of-label">Cán cân (Imbalance):</span>
-                            <span class="of-value" id="of-imbalance">—</span>
+                    <!-- 4-Grid Order Levels: Entry, SL, TP, R:R -->
+                    <div class="plan-levels-grid">
+                        <div class="level-box">
+                            <span class="lvl-label">Điểm vào (Entry)</span>
+                            <span class="lvl-val tabular" id="plan-entry">—</span>
                         </div>
-                        <div class="of-metric">
-                            <span class="of-label">Tổng khối lượng:</span>
-                            <span class="of-value" id="of-total-vol">— BTC</span>
+                        <div class="level-box level-sl">
+                            <span class="lvl-label">Dừng lỗ (Stop Loss)</span>
+                            <span class="lvl-val tabular" id="plan-sl">—</span>
                         </div>
-                        <div class="of-metric">
-                            <span class="of-label">Số giao dịch khớp:</span>
-                            <span class="of-value" id="of-trade-count">—</span>
+                        <div class="level-box level-tp">
+                            <span class="lvl-label">Chốt lời (Take Profit)</span>
+                            <span class="lvl-val tabular" id="plan-tp">—</span>
                         </div>
-                        <div class="of-metric">
-                            <span class="of-label">Thời gian phủ:</span>
-                            <span class="of-value" id="of-coverage">—s / 60s</span>
+                        <div class="level-box">
+                            <span class="lvl-label">Tỷ lệ L/R (R:R)</span>
+                            <span class="lvl-val tabular" id="plan-rr">1:1.5</span>
                         </div>
                     </div>
-                    <div class="of-notice" id="of-notice" style="display: none;"></div>
+
+                    <!-- Reasoning text -->
+                    <div class="plan-reason-box">
+                        <div class="reason-title">Căn cứ chiến lược:</div>
+                        <p class="reason-text" id="plan-reason-text">Đang đồng bộ dữ liệu thị trường và dòng lệnh...</p>
+                    </div>
+
+                    <!-- Experimental Disclaimer -->
+                    <div class="plan-disclaimer">
+                        Kế hoạch thử nghiệm quy tắc kết hợp mô hình Spot và dòng lệnh Order Flow. Không phải lời khuyên
+                        đầu tư.
+                    </div>
                 </div>
 
-                <!-- Collapsible Detailed Candles Table -->
-                <details class="accordion-panel">
-                    <summary class="accordion-summary">Xem bảng dữ liệu nến chi tiết</summary>
-                    <div class="table-container">
-                        <table class="simple-table" id="table-candles">
-                            <thead>
-                                <tr>
-                                    <th>Thời gian (Giờ VN - UTC+7)</th>
-                                    <th class="num-col">Mở (USDT)</th>
-                                    <th class="num-col">Cao (USDT)</th>
-                                    <th class="num-col">Thấp (USDT)</th>
-                                    <th class="num-col">Đóng (USDT)</th>
-                                    <th class="num-col">Khối lượng (BTC)</th>
-                                    <th class="num-col">Giá trị (USDT)</th>
-                                    <th class="num-col">VWAP (USDT)</th>
-                                    <th>Trạng thái</th>
-                                </tr>
-                            </thead>
-                            <tbody id="candles-table-body">
-                                <tr><td colspan="9" class="empty-cell">Đang tải dữ liệu nến...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </details>
-            </section>
+            </div>
+        </section>
 
-            <!-- ========================================================= -->
-            <!-- TAB 2: GIAO DỊCH LỚN                                      -->
-            <!-- ========================================================= -->
-            <section class="tab-pane" id="tab-trades">
-                <!-- Filters & Action Bar -->
-                <div class="filter-bar">
-                    <div class="filter-controls">
-                        <span class="source-tag">Nguồn: PostgreSQL Data Warehouse</span>
-                        <label class="control-group">
-                            <span class="control-label">Khoảng thời gian:</span>
-                            <select id="trades-time-range" class="select-input">
+        <!-- AREA C: ANALYTICS ROW (3 Equal Columns) -->
+        <section class="analytics-row">
+
+            <!-- Col 1: 60s Order Flow Imbalance -->
+            <div class="analytics-card card">
+                <div class="card-header-compact">
+                    <h3 class="card-heading">Áp lực Mua/Bán (60 giây)</h3>
+                    <span class="micro-badge" id="of-status-badge">Kết nối...</span>
+                </div>
+
+                <div class="of-ratio-display">
+                    <div class="of-ratio-labels">
+                        <span class="buy-text font-bold">Mua: <span class="tabular" id="of-buy-pct">—%</span> (<span
+                                class="tabular" id="of-buy-vol">— BTC</span>)</span>
+                        <span class="sell-text font-bold">Bán: <span class="tabular" id="of-sell-pct">—%</span> (<span
+                                class="tabular" id="of-sell-vol">— BTC</span>)</span>
+                    </div>
+                    <div class="of-bar-track">
+                        <div class="of-bar-buy" id="of-bar-buy" style="width: 50%;"></div>
+                        <div class="of-bar-sell" id="of-bar-sell" style="width: 50%;"></div>
+                    </div>
+                </div>
+
+                <div class="analytics-metrics-list">
+                    <div class="am-row">
+                        <span class="am-label">Cán cân (Imbalance):</span>
+                        <span class="am-val tabular font-bold" id="of-imbalance">—</span>
+                    </div>
+                    <div class="am-row">
+                        <span class="am-label">Số giao dịch khớp:</span>
+                        <span class="am-val tabular" id="of-trade-count">—</span>
+                    </div>
+                    <div class="am-row">
+                        <span class="am-label">Thời gian tích lũy:</span>
+                        <span class="am-val tabular" id="of-coverage">—s / 60s</span>
+                    </div>
+                </div>
+                <div class="card-hint">Giao dịch chủ động đã khớp trên Spot BTC-USDT. Không phải độ sâu sổ lệnh.</div>
+            </div>
+
+            <!-- Col 2: Volume History Bar Chart -->
+            <div class="analytics-card card">
+                <div class="card-header-compact">
+                    <h3 class="card-heading">Khối lượng nến gần nhất</h3>
+                    <span class="micro-meta" id="volume-chart-tf">Nến 1m (BTC)</span>
+                </div>
+                <div class="chart-svg-container" id="volume-svg-container">
+                    <svg class="analytics-svg" id="volume-bar-svg" viewBox="0 0 360 130" preserveAspectRatio="none">
+                        <!-- Dynamic Volume Bars -->
+                    </svg>
+                </div>
+                <div class="card-hint" id="volume-chart-stats">Tổng volume 30 nến: <span class="tabular font-bold"
+                        id="vol-stats-total">— BTC</span></div>
+            </div>
+
+            <!-- Col 3: Large Trades Donut Chart -->
+            <div class="analytics-card card">
+                <div class="card-header-compact">
+                    <h3 class="card-heading">Cơ cấu giao dịch lớn (≥ $100K)</h3>
+                    <span class="micro-meta" id="donut-filter-desc">Toàn bộ tập lọc</span>
+                </div>
+                <div class="donut-chart-container">
+                    <div class="donut-svg-wrapper">
+                        <svg class="analytics-svg donut-svg" id="donut-svg" viewBox="0 0 160 160">
+                            <!-- Dynamic Donut Slices & Center Label -->
+                        </svg>
+                    </div>
+                    <div class="donut-legend" id="donut-legend">
+                        <div class="donut-legend-item">
+                            <span class="legend-color-dot dot-buy"></span>
+                            <span class="legend-label">Mua:</span>
+                            <strong class="tabular buy-text" id="donut-buy-val">—</strong>
+                            <small class="tabular text-muted" id="donut-buy-pct">(—%)</small>
+                        </div>
+                        <div class="donut-legend-item">
+                            <span class="legend-color-dot dot-sell"></span>
+                            <span class="legend-label">Bán:</span>
+                            <strong class="tabular sell-text" id="donut-sell-val">—</strong>
+                            <small class="tabular text-muted" id="donut-sell-pct">(—%)</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-hint">Tính trên toàn bộ giao dịch thỏa bộ lọc từ Data Warehouse.</div>
+            </div>
+
+        </section>
+
+        <!-- AREA D: BOTTOM ZONE (Large Trades Table, Collapsible Pred History, Model Details) -->
+        <section class="bottom-section">
+
+            <!-- Large Trades Table -->
+            <div class="card trades-table-card">
+                <div class="trades-card-header">
+                    <div class="tch-left">
+                        <h3 class="card-heading">Giao dịch lớn (≥ $100,000 USDT)</h3>
+                        <span class="micro-meta" id="trades-summary-inline">Tổng cộng: <strong class="tabular"
+                                id="trades-summary-count">—</strong> giao dịch (<strong class="tabular"
+                                id="trades-summary-value">— USDT</strong>)</span>
+                    </div>
+                    <div class="tch-right">
+                        <div class="filter-controls">
+                            <select id="trades-time-range" class="select-terminal">
                                 <option value="all" selected>Tất cả thời gian</option>
                                 <option value="1h">1 giờ qua</option>
                                 <option value="24h">24 giờ qua</option>
                                 <option value="7d">7 ngày qua</option>
                             </select>
-                        </label>
-                        <label class="control-group">
-                            <span class="control-label">Ngưỡng tối thiểu:</span>
-                            <select id="trades-min-value" class="select-input">
+                            <select id="trades-min-value" class="select-terminal">
                                 <option value="100000" selected>≥ 100,000 USDT</option>
                                 <option value="250000">≥ 250,000 USDT</option>
                                 <option value="500000">≥ 500,000 USDT</option>
                                 <option value="1000000">≥ 1,000,000 USDT</option>
                             </select>
-                        </label>
-                    </div>
-                    <div class="filter-actions">
-                        <button id="btn-export-trades" class="btn btn-secondary">Xuất CSV</button>
+                            <button id="btn-export-trades" class="btn btn-secondary btn-sm">Xuất CSV</button>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Aggregated Summary for the Entire Filtered Result Set -->
-                <div class="summary-card">
-                    <div class="summary-item">
-                        <span class="summary-label">Số giao dịch thỏa điều kiện:</span>
-                        <strong class="summary-val" id="trades-summary-count">—</strong>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">Tổng giá trị giao dịch:</span>
-                        <strong class="summary-val" id="trades-summary-value">—</strong>
-                    </div>
-                </div>
-
-                <!-- Table -->
                 <div class="table-container">
-                    <table class="simple-table" id="table-large-trades">
+                    <table class="terminal-table" id="table-large-trades">
                         <thead>
                             <tr>
-                                <th>Thời gian (Giờ VN - UTC+7)</th>
+                                <th>Thời gian</th>
                                 <th>Chiều</th>
-                                <th class="num-col">Giá khớp (USDT/BTC)</th>
+                                <th class="num-col">Giá khớp (USDT)</th>
                                 <th class="num-col">Khối lượng (BTC)</th>
-                                <th class="num-col">Giá trị giao dịch (USDT)</th>
+                                <th class="num-col">Giá trị (USDT)</th>
                                 <th>Mã giao dịch (Trade ID)</th>
                             </tr>
                         </thead>
                         <tbody id="large-trades-body">
-                            <tr><td colspan="6" class="empty-cell">Đang tải danh sách giao dịch lớn...</td></tr>
+                            <tr>
+                                <td colspan="6" class="empty-cell">Đang tải dữ liệu giao dịch lớn...</td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
 
-                <!-- Pagination -->
                 <div class="pagination-footer">
                     <button id="btn-trades-prev" class="btn btn-sm" disabled>Trang trước</button>
-                    <span id="trades-page-indicator" class="page-text">Trang 1 / 1</span>
+                    <span id="trades-page-indicator" class="page-text tabular">Trang 1 / 1</span>
                     <button id="btn-trades-next" class="btn btn-sm" disabled>Trang sau</button>
                 </div>
-            </section>
+            </div>
 
-            <!-- ========================================================= -->
-            <!-- TAB 3: DỰ BÁO                                             -->
-            <!-- ========================================================= -->
-            <section class="tab-pane" id="tab-prediction">
-                <!-- 1. Latest Prediction Card -->
-                <div class="panel-box prediction-card">
-                    <div class="pred-header">
-                        <div>
-                            <h2 class="pred-title">Dự báo hướng giá BTC-USDT (+5 phút) gần nhất</h2>
-                            <p class="pred-subtext" id="pred-model-subtext">Lưu trữ kết quả: <strong>PostgreSQL Data Warehouse</strong> · Nguồn nến đầu vào: <strong>OKX REST (confirmed) / DW</strong></p>
-                        </div>
-                    </div>
-
-                    <div id="pred-result-area" class="pred-result-grid">
-                        <div class="pred-main-metric">
-                            <span class="pred-metric-label">Xu hướng dự báo:</span>
-                            <div class="pred-badge-wrapper">
-                                <span class="pred-direction-badge" id="pred-dir-badge">—</span>
-                            </div>
-                            <div class="pred-explanation">NOT_UP: Bao gồm xu hướng giảm giá hoặc đi ngang.</div>
-                        </div>
-
-                        <div class="pred-meta-grid">
-                            <div class="pred-meta-item">
-                                <span class="pm-label">Xác suất P(UP):</span>
-                                <strong class="pm-val text-buy" id="pred-prob-up">—</strong>
-                            </div>
-                            <div class="pred-meta-item">
-                                <span class="pm-label">Xác suất P(NOT_UP):</span>
-                                <strong class="pm-val text-sell" id="pred-prob-notup">—</strong>
-                            </div>
-                            <div class="pred-meta-item">
-                                <span class="pm-label">Giá tại thời điểm đặc trưng:</span>
-                                <strong class="pm-val" id="pred-base-price">—</strong>
-                            </div>
-                            <div class="pred-meta-item">
-                                <span class="pm-label">Thời điểm dữ liệu đầu vào (Giờ VN):</span>
-                                <span class="pm-val" id="pred-feature-time">—</span>
-                            </div>
-                            <div class="pred-meta-item">
-                                <span class="pm-label">Thời điểm mục tiêu (+5m) (Giờ VN):</span>
-                                <span class="pm-val" id="pred-target-time">—</span>
-                            </div>
-                            <div class="pred-meta-item">
-                                <span class="pm-label">Trạng thái đối chiếu (+5m):</span>
-                                <span class="pm-val" id="pred-eval-status">—</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 2. Compact Automated Background Worker Status Line -->
-                <div class="worker-status-bar">
-                    <div class="ws-left">
-                        <span class="ws-label">Tác vụ tự động:</span>
-                        <span class="status-badge" id="worker-status-badge">Đang chạy</span>
-                        <span class="sep">•</span>
-                        <span>Kiểm tra: <strong id="worker-last-check">—</strong></span>
-                        <span class="sep">•</span>
-                        <span>Dự báo gần nhất: <strong id="worker-last-success" class="text-buy">—</strong></span>
-                        <span class="sep">•</span>
-                        <span id="worker-cycle-status">Bình thường</span>
-                        <span class="sep">•</span>
-                        <span id="worker-counts" class="text-muted">—</span>
-                    </div>
-                    <div class="ws-right">
-                        <button id="btn-trigger-pred" class="btn btn-primary btn-sm">Chạy chu kỳ ngay</button>
-                    </div>
-                </div>
-                <div id="pred-trigger-feedback" class="feedback-msg"></div>
-
-                <!-- 3. Prediction History Table -->
-                <div class="panel-box">
-                    <div class="panel-header">
-                        <h3 class="panel-title">Lịch sử dự báo</h3>
-                    </div>
+            <!-- Collapsible Section 1: Prediction History -->
+            <details class="terminal-accordion card">
+                <summary class="accordion-header">
+                    <span class="accordion-title">Lịch sử dự báo và đối chiếu kết quả (+5 phút)</span>
+                    <span class="accordion-hint">Nhấn để mở rộng</span>
+                </summary>
+                <div class="accordion-body">
                     <div class="table-container">
-                        <table class="simple-table" id="table-pred-history">
+                        <table class="terminal-table" id="table-pred-history">
                             <thead>
                                 <tr>
-                                    <th>Thời điểm dữ liệu (Giờ VN)</th>
+                                    <th>Thời điểm dữ liệu (VN)</th>
                                     <th class="num-col">Giá đầu vào (USDT)</th>
                                     <th>Dự báo</th>
-                                    <th class="num-col">Xác suất P(UP)</th>
-                                    <th>Thời điểm mục tiêu (Giờ VN)</th>
+                                    <th class="num-col">P(UP)</th>
+                                    <th>Thời điểm mục tiêu (VN)</th>
                                     <th class="num-col">Giá thực tế (USDT)</th>
                                     <th>Thực tế</th>
                                     <th>Đối chiếu</th>
                                 </tr>
                             </thead>
                             <tbody id="pred-history-body">
-                                <tr><td colspan="8" class="empty-cell">Đang tải lịch sử dự báo...</td></tr>
+                                <tr>
+                                    <td colspan="8" class="empty-cell">Đang tải lịch sử...</td>
+                                </tr>
                             </tbody>
                         </table>
                     </div>
                     <div class="pagination-footer">
                         <button id="btn-pred-prev" class="btn btn-sm" disabled>Trang trước</button>
-                        <span id="pred-page-indicator" class="page-text">Trang 1 / 1</span>
+                        <span id="pred-page-indicator" class="page-text tabular">Trang 1 / 1</span>
                         <button id="btn-pred-next" class="btn btn-sm" disabled>Trang sau</button>
                     </div>
                 </div>
+            </details>
 
-                <!-- 4. Collapsible Model Information -->
-                <details class="accordion-panel">
-                    <summary class="accordion-summary">Thông tin mô hình & Kết quả đánh giá (Metadata)</summary>
-                    <div class="model-info-content" id="model-info-content">
-                        <p class="text-muted">Đang tải thông tin mô hình từ artifacts...</p>
+            <!-- Collapsible Section 2: Model Performance & Pipeline Architecture Details -->
+            <details class="terminal-accordion card">
+                <summary class="accordion-header">
+                    <span class="accordion-title">Thông tin mô hình & Vận hành tác vụ tự động</span>
+                    <span class="accordion-hint">Nhấn để mở rộng</span>
+                </summary>
+                <div class="accordion-body">
+                    <div class="worker-bar-inline">
+                        <div class="wb-info">
+                            <span>Tác vụ nền: <strong id="worker-status-badge">Đang chạy</strong></span>
+                            <span class="sep">•</span>
+                            <span>Chu kỳ gần nhất: <strong class="tabular" id="worker-last-check">—</strong></span>
+                            <span class="sep">•</span>
+                            <span id="worker-cycle-status">Bình thường</span>
+                        </div>
+                        <div class="wb-action">
+                            <button id="btn-trigger-pred" class="btn btn-primary btn-sm">Chạy chu kỳ suy luận
+                                ngay</button>
+                        </div>
                     </div>
-                </details>
-            </section>
-        </main>
+                    <div id="pred-trigger-feedback" class="feedback-msg"></div>
+
+                    <div class="model-info-content" id="model-info-content">
+                        <p class="text-muted">Đang tải thông tin metadata từ artifacts...</p>
+                    </div>
+                </div>
+            </details>
+
+        </section>
+
     </div>
 
     <!-- Application JavaScript Client -->
     <script src="/static/js/dashboard.js"></script>
 </body>
+
 </html>

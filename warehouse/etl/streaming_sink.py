@@ -37,8 +37,10 @@ def ensure_utc_datetime(dt: Any) -> Optional[datetime]:
         return None
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
-            # Naive datetime from PySpark deserialization representing UTC event time
-            return dt.replace(tzinfo=timezone.utc)
+            # PySpark deserializes TimestampType via datetime.fromtimestamp(ts)
+            # using the host OS local timezone. Therefore, interpret naive datetime
+            # in local timezone and convert to UTC:
+            return dt.astimezone().astimezone(timezone.utc)
         return dt.astimezone(timezone.utc)
     if isinstance(dt, (int, float)):
         ts = dt / 1000.0 if dt > 1e11 else float(dt)
@@ -47,7 +49,7 @@ def ensure_utc_datetime(dt: Any) -> Optional[datetime]:
         try:
             parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
             if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone().astimezone(timezone.utc)
             return parsed.astimezone(timezone.utc)
         except Exception:
             return None
@@ -112,10 +114,16 @@ def write_whales_batch(batch_df, batch_id: int = 0, conn=None, table_name: str =
             price = float(r["price"] if not isinstance(r, dict) else r_dict["price"])
             size = float(r["size"] if not isinstance(r, dict) else r_dict["size"])
             side = str(r["side"] if not isinstance(r, dict) else r_dict["side"])
-            raw_trade_time = r["trade_time"] if not isinstance(r, dict) else r_dict["trade_time"]
-            trade_time = ensure_utc_datetime(raw_trade_time)
+            
+            # Ưu tiên epoch millisecond thô (raw_timestamp) từ sàn nếu có để bảo đảm độ chính xác 100% không phụ thuộc múi giờ
+            if r_dict.get("raw_timestamp") is not None:
+                trade_time = datetime.fromtimestamp(float(r_dict["raw_timestamp"]) / 1000.0, tz=timezone.utc)
+            else:
+                raw_trade_time = r["trade_time"] if not isinstance(r, dict) else r_dict["trade_time"]
+                trade_time = ensure_utc_datetime(raw_trade_time)
+
             trade_date = r["trade_date"] if not isinstance(r, dict) else r_dict["trade_date"]
-            if trade_date is None and trade_time is not None:
+            if trade_time is not None:
                 trade_date = trade_time.strftime("%Y-%m-%d")
             arrival = ensure_utc_datetime(arrival)
 

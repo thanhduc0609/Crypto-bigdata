@@ -106,6 +106,8 @@ def create_spark_session(
         .config("spark.sql.parquet.enableVectorizedReader", "false")
         .config("spark.sql.parquet.inferTimestampNTZ.enabled", "false")
         .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.driver.extraJavaOptions", "-Duser.timezone=UTC")
+        .config("spark.executor.extraJavaOptions", "-Duser.timezone=UTC")
     )
 
     if packages:

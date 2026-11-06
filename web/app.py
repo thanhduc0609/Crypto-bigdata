@@ -41,6 +41,7 @@ from web.services.prediction_service import (
     get_prediction_history,
     get_model_metadata
 )
+from web.services.futures_plan_service import generate_futures_plan
 
 load_env_vars()
 
@@ -296,6 +297,25 @@ def api_ml_prediction():
         get_db_conn=get_db_connection
     )
     return jsonify(data), code
+
+
+@app.route("/api/futures/plan")
+def api_futures_plan():
+    """
+    Tạo kế hoạch giao dịch phái sinh tham khảo (BTC-USDT-SWAP)
+    kết hợp mô hình XGBoost Spot và dòng lệnh Order Flow 60s thời gian thực.
+    """
+    pred_res, _ = get_latest_prediction(symbol=TARGET_SYMBOL, get_db_conn=get_db_connection)
+    tracker = get_orderflow_tracker(symbol=TARGET_SYMBOL, window_seconds=60, autostart=False)
+    of_data = tracker.get_orderflow_metrics()
+
+    plan = generate_futures_plan(
+        prediction_data=pred_res,
+        orderflow_data=of_data,
+        okx_rest_url=OKX_REST_URL,
+        fetch_okx_json=fetch_okx_json
+    )
+    return jsonify(plan), 200
 
 
 @app.route("/api/ml/history")
