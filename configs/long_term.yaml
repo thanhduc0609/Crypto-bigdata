@@ -1,0 +1,13 @@
+# Independent academic forecast task. Never changes the +5m classifier.
+source:
+  symbol: BTC-USDT
+  bar: 1Dutc
+  start: '2017-01-01'
+forecast:
+  horizon_months: 36
+  holdout_months: 36
+  min_train_months: 24
+  validation_months: 36
+  validation_stride: 6
+  simulations: 3000
+  seed: 42

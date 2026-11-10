@@ -63,6 +63,7 @@
         toggleVwap: document.getElementById("toggle-vwap"),
         chartContainer: document.getElementById("tv-chart"),
         chartErrorOverlay: document.getElementById("chart-error-overlay"),
+        candleProvenance: document.getElementById("candle-provenance"),
         ciTime: document.getElementById("ci-time"),
         ciOpen: document.getElementById("ci-open"),
         ciHigh: document.getElementById("ci-high"),
@@ -828,7 +829,7 @@
             // Buy slice starts at -90deg (top: stroke-dashoffset = 0)
             const sellOffset = -buyStroke;
 
-            const totalText = "$" + NumUtils.formatCompact(total);
+            const totalText = NumUtils.formatCompact(total);
 
             el.donutSvg.innerHTML = `
                 <!-- Background track -->
@@ -839,7 +840,7 @@
                         stroke-dasharray="${buyStroke} ${circumference}"
                         stroke-dashoffset="0"
                         transform="rotate(-90 80 80)">
-                    <title>Mua: $${NumUtils.formatIntegerUSD(buyVal)} (${buyPct}%)</title>
+                    <title>Mua: ${NumUtils.formatIntegerUSD(buyVal)} USDT (${buyPct}%)</title>
                 </circle>
 
                 <!-- Sell slice -->
@@ -847,7 +848,7 @@
                         stroke-dasharray="${sellStroke} ${circumference}"
                         stroke-dashoffset="${sellOffset}"
                         transform="rotate(-90 80 80)">
-                    <title>Bán: $${NumUtils.formatIntegerUSD(sellVal)} (${sellPct}%)</title>
+                    <title>Bán: ${NumUtils.formatIntegerUSD(sellVal)} USDT (${sellPct}%)</title>
                 </circle>
 
                 <!-- Center Hole Text -->
@@ -855,9 +856,9 @@
                 <text x="80" y="93" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">TỔNG USDT</text>
             `;
 
-            el.donutBuyVal.textContent = "$" + NumUtils.formatCompact(buyVal);
+            el.donutBuyVal.textContent = NumUtils.formatCompact(buyVal) + " USDT";
             el.donutBuyPct.textContent = `(${buyPct}%)`;
-            el.donutSellVal.textContent = "$" + NumUtils.formatCompact(sellVal);
+            el.donutSellVal.textContent = NumUtils.formatCompact(sellVal) + " USDT";
             el.donutSellPct.textContent = `(${sellPct}%)`;
         }
     };
@@ -868,9 +869,16 @@
     const LargeTradesView = {
         async fetchAndRender() {
             try {
+                const minimumAtRequest=state.tradesMinValue;
                 const url = `/api/trades/large?time_range=${state.tradesTimeRange}&min_value=${state.tradesMinValue}&page=${state.tradesPage}&page_size=${state.tradesPageSize}`;
                 const data = await ApiClient.fetchJson(url, "large_trades");
                 if (!data) return;
+
+                const tradesHeading=document.getElementById('large-trades-heading');
+                const donutHeading=document.getElementById('donut-heading');
+                const threshold=NumUtils.formatIntegerUSD(minimumAtRequest)+' USDT';
+                if (tradesHeading) tradesHeading.textContent=`Giao dịch lớn (≥ ${threshold})`;
+                if (donutHeading) donutHeading.textContent=`Cơ cấu giao dịch lớn (≥ ${threshold})`;
 
                 state.tradesTotalPages = data.total_pages || 1;
 
@@ -1127,9 +1135,24 @@
 
             // Large trades CSV export
             if (el.btnExportTrades) {
-                el.btnExportTrades.addEventListener("click", () => {
+                el.btnExportTrades.addEventListener("click", async () => {
                     const exportUrl = `/api/trades/large/export?time_range=${state.tradesTimeRange}&min_value=${state.tradesMinValue}`;
-                    window.open(exportUrl, "_blank");
+                    const feedback=document.getElementById('trades-export-feedback');
+                    el.btnExportTrades.disabled=true;
+                    if (feedback) feedback.textContent='Đang xuất dữ liệu…';
+                    try {
+                        const response=await fetch(exportUrl,{signal:AbortSignal.timeout(15000)});
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const url=URL.createObjectURL(await response.blob());
+                        const link=document.createElement('a');
+                        link.href=url;link.download='btc_large_trades.csv';
+                        document.body.appendChild(link);link.click();link.remove();
+                        setTimeout(()=>URL.revokeObjectURL(url),1000);
+                        if (feedback) feedback.textContent='Đã xuất CSV theo bộ lọc.';
+                    } catch (error) {
+                        if (feedback) feedback.textContent='Không xuất được CSV. Hãy kiểm tra kết nối và thử lại.';
+                        console.error('[LargeTrades] Export failed',error);
+                    } finally {el.btnExportTrades.disabled=false;}
                 });
             }
 
@@ -1220,18 +1243,55 @@
         },
 
         async fetchCandles() {
+            const timeframe = state.timeframe;
+            // A slow fallback must not be cancelled by the next 5s poll.
+            if (this.candleRequestTf === timeframe) return;
+            this.candleRequestTf = timeframe;
+            const requestId = this.candleRequestId = (this.candleRequestId || 0) + 1;
+            if (el.candleProvenance && this.candleDisplayedTf !== timeframe) {
+                el.candleProvenance.dataset.state = "loading";
+                el.candleProvenance.textContent = `Đang tải nến ${timeframe}…` +
+                    (this.candleDisplayedTf ? ` Biểu đồ đang giữ nến ${this.candleDisplayedTf} trước đó.` : "");
+            }
             try {
-                const data = await ApiClient.fetchJson(`/api/candles?timeframe=${state.timeframe}&limit=150`, "candles");
-                if (!data || !data.candles) return;
+                const data = await ApiClient.fetchJson(`/api/candles?timeframe=${timeframe}&limit=150`, "candles");
+                if (!data || !data.candles || requestId !== this.candleRequestId) return;
 
                 TVChartManager.updateData(data.candles);
                 VolumeChartView.render(data.candles);
+                this.candleDisplayedTf = timeframe;
+                this.candleLastFetched = data.fetched_at;
+                if (el.candleProvenance) {
+                    const source = data.source === "postgres_dw" ? "PostgreSQL" : "OKX REST";
+                    const via = {upstream: "trực tiếp", cache: "cache", database: "dữ liệu kho", stale_cache: "cache dự phòng"}[data.served_from] || data.served_from;
+                    const notes = [];
+                    if (data.fallback_reason) notes.push(data.fallback_reason === "upstream_stale_candles"
+                        ? "OKX trả dữ liệu cũ; dùng dữ liệu dự phòng" : "OKX lỗi/bận; dùng dữ liệu dự phòng");
+                    if (data.is_stale) notes.push("DỮ LIỆU CŨ");
+                    if (data.coverage_complete === false) notes.push("thiếu phút hoặc khoảng nến");
+                    if (!data.candles[data.candles.length - 1].is_closed) notes.push("nến cuối chưa xác nhận hoàn tất");
+                    const coverage = data.coverage_complete === null ? "độ phủ phút: OKX không cung cấp" : "độ phủ: đã đối chiếu timestamp";
+                    el.candleProvenance.dataset.state = data.degraded ? "degraded" : "ready";
+                    el.candleProvenance.textContent = `${source} · ${via} · nến ${timeframe} · ${data.candles.length}/150 nến · ` +
+                        `Thu nhận: ${TimeUtils.formatDateTimeVN(data.fetched_at)} (UTC+7) · ` +
+                        `Mở nến cuối: ${TimeUtils.formatDateTimeVN(data.data_timestamp)} · ${coverage}` +
+                        (notes.length ? ` · ${notes.join("; ")}` : "");
+                    el.candleProvenance.title = `Lý do: ${data.fallback_reason || "không"}; độ trễ sau khoảng dữ liệu: ${data.freshness_lag_seconds}s; tuổi cache: ${data.cache_age_seconds}s. Nguồn nến độc lập với giá ở đầu trang. Nến đang mở có thể thay đổi.`;
+                }
 
                 if (el.volumeChartTf) {
-                    el.volumeChartTf.textContent = `Nến ${state.timeframe} (BTC)`;
+                    el.volumeChartTf.textContent = `Nến ${timeframe} (BTC)`;
                 }
             } catch (e) {
                 console.error("[Candles] Error:", e);
+                if (requestId === this.candleRequestId && el.candleProvenance) {
+                    el.candleProvenance.dataset.state = "error";
+                    el.candleProvenance.textContent = this.candleDisplayedTf
+                        ? `Chưa cập nhật được nến ${timeframe}. Đang giữ biểu đồ ${this.candleDisplayedTf} cũ; thu nhận lần cuối ${TimeUtils.formatDateTimeVN(this.candleLastFetched)} (UTC+7).`
+                        : "Không có dữ liệu nến hợp lệ. Hệ thống sẽ thử lại; hãy kiểm tra kết nối OKX/PostgreSQL.";
+                }
+            } finally {
+                if (requestId === this.candleRequestId) this.candleRequestTf = null;
             }
         },
 

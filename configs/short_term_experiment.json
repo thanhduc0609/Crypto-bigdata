@@ -1,0 +1,44 @@
+{
+  "protocol_version": 1,
+  "task": "BTC-USDT confirmed 1m close direction at +5 minutes",
+  "snapshot_run_id": "20261109T063455Z-adb14c7395",
+  "snapshot_sha256": "50a2a30a67c4e8d5280a5d44334ed153f28320a15d481b7649e440947b205dd5",
+  "seed": 42,
+  "horizon_minutes": 5,
+  "feature_history_minutes": 120,
+  "validation_windows": [
+    ["2026-08-31T00:00:00Z", "2026-09-07T00:00:00Z"],
+    ["2026-09-14T00:00:00Z", "2026-09-21T00:00:00Z"],
+    ["2026-09-28T00:00:00Z", "2026-10-05T00:00:00Z"],
+    ["2026-10-12T00:00:00Z", "2026-10-19T00:00:00Z"]
+  ],
+  "final_fit_before": "2026-10-24T00:00:00Z",
+  "test_window": ["2026-10-24T00:00:00Z", "2026-11-05T00:00:00Z"],
+  "previously_inspected_diagnostic_from": "2026-11-05T00:00:00Z",
+  "test_rationale": "Legacy artifact was created on Oct 23; Nov 5-9 includes earlier live-flow audits and is reported separately, never used for selection.",
+  "label_maturity": "feature_start + horizon + 1 minute; require label_available_at strictly before each fit/evaluation boundary",
+  "thresholds": [0.45, 0.475, 0.5, 0.525, 0.55],
+  "selection_metric": "mean validation balanced_accuracy; tie-break log_loss, then candidate name",
+  "calibration_days": 7,
+  "bootstrap_repetitions": 2000,
+  "bootstrap_cluster": "UTC day; approximate paired confidence intervals, overlapping labels are not independent",
+  "candidates": [
+    {"name": "logistic_stationary_c01", "kind": "logistic", "features": "stationary", "C": 0.1},
+    {"name": "logistic_stationary_c1", "kind": "logistic", "features": "stationary", "C": 1.0},
+    {"name": "xgb_legacy_retrained", "kind": "xgb", "features": "legacy", "depth": 4, "trees": 200, "rate": 0.05, "min_child": 1, "lambda": 1, "alpha": 0},
+    {"name": "xgb_legacy_regularized", "kind": "xgb", "features": "legacy", "depth": 2, "trees": 200, "rate": 0.04, "min_child": 100, "lambda": 20, "alpha": 0.5},
+    {"name": "xgb_stationary_shallow", "kind": "xgb", "features": "stationary", "depth": 2, "trees": 250, "rate": 0.04, "min_child": 100, "lambda": 20, "alpha": 0.5},
+    {"name": "xgb_stationary_depth3", "kind": "xgb", "features": "stationary", "depth": 3, "trees": 250, "rate": 0.04, "min_child": 120, "lambda": 30, "alpha": 1},
+    {"name": "xgb_stationary_platt", "kind": "xgb", "features": "stationary", "depth": 2, "trees": 250, "rate": 0.04, "min_child": 100, "lambda": 20, "alpha": 0.5, "calibration": "platt"},
+    {"name": "hist_stationary", "kind": "hist", "features": "stationary", "trees": 150, "rate": 0.05, "leaves": 7, "lambda": 20}
+  ],
+  "baselines": ["train_majority", "momentum_1m", "momentum_5m", "mean_reversion_1m", "mean_reversion_5m"],
+  "promotion_gate": {
+    "minimum_validation_balanced_accuracy": 0.505,
+    "minimum_winning_validation_folds": 3,
+    "test_must_beat_all_predeclared_baselines_and_incumbent": true,
+    "paired_day_bootstrap_lower_bound_above_zero_vs_validation_champion_and_incumbent": true,
+    "test_log_loss_and_brier_must_beat_train_frequency": true,
+    "inference_feature_parity_required": true
+  }
+}

@@ -43,10 +43,75 @@ load_env_vars()
 pipeline_cfg = get_pipeline_config()
 
 
+def transform_bronze_trades(raw_df: DataFrame):
+    """Production cleaning plan, without actions or writes; reusable by audit replay.
+
+    Optional audit source columns are retained only when present in the input.
+    Validation/deduplication semantics are unchanged.
+    """
+    # 1. Parse JSON payload if raw Kafka payload exists, otherwise use tabular columns
+    if "raw_payload" in raw_df.columns:
+        parsed_df = (
+            raw_df
+            .withColumn("parsed", from_json(col("raw_payload"), RAW_TRADE_SCHEMA))
+            .select(
+                col("parsed.trade_id").alias("trade_id"),
+                col("parsed.symbol").alias("symbol"),
+                col("parsed.price").alias("price"),
+                col("parsed.size").alias("size"),
+                col("parsed.side").alias("side"),
+                col("parsed.timestamp").alias("raw_timestamp"),
+                col("kafka_partition"),
+                col("kafka_offset"),
+                col("kafka_timestamp").alias("kafka_arrival_time"),
+                *[col(c) for c in ("_source_object", "_source_sha256") if c in raw_df.columns]
+            )
+        )
+    else:
+        parsed_df = raw_df
+
+    # 2. Strict Silver Validation Conditions (reject NaN, Inf, non-BTC, negative/zero prices, empty trade_ids)
+    is_valid_condition = (
+        col("trade_id").isNotNull() & (trim(col("trade_id")) != "") &
+        col("symbol").isNotNull() & (col("symbol") == "BTC-USDT") &
+        col("price").isNotNull() & (~isnan(col("price"))) & (col("price") > 0.0) & (col("price") < float("inf")) &
+        col("size").isNotNull() & (~isnan(col("size"))) & (col("size") > 0.0) & (col("size") < float("inf")) &
+        col("raw_timestamp").isNotNull() & (col("raw_timestamp") > 0) &
+        col("side").isNotNull() & col("side").isin("buy", "sell")
+    )
+
+    valid_df = parsed_df.filter(is_valid_condition.isNotNull() & is_valid_condition)
+    invalid_df = parsed_df.filter(is_valid_condition.isNull() | (~is_valid_condition))
+
+    from pyspark.sql.window import Window
+    from pyspark.sql.functions import row_number
+
+    # 3. Standardization & Deterministic Deduplication on trade_id
+    # If conflicting records exist with same trade_id, preserve latest raw_timestamp / highest kafka_offset
+    sort_cols = [col("raw_timestamp").desc()]
+    if "kafka_offset" in valid_df.columns:
+        sort_cols.append(col("kafka_offset").desc_nulls_last())
+    dedup_window = Window.partitionBy("trade_id").orderBy(*sort_cols)
+
+    cleaned_df = (
+        valid_df
+        .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))
+        .withColumn("trade_value", col("price") * col("size"))
+        .withColumn("trade_date", date_format(col("trade_time"), "yyyy-MM-dd"))
+        .withColumn("_row_num", row_number().over(dedup_window))
+        .filter(col("_row_num") == 1)
+        .drop("_row_num")
+    )
+
+    return parsed_df, invalid_df, valid_df, cleaned_df
+
+
 def process_bronze_to_silver(
     spark: SparkSession,
     symbol: str = "BTC-USDT",
-    trade_date: Optional[str] = None
+    trade_date: Optional[str] = None,
+    bronze_path: Optional[str] = None,
+    silver_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Executes the Bronze to Silver ETL job for BTC trades.
@@ -55,8 +120,8 @@ def process_bronze_to_silver(
     if symbol != "BTC-USDT":
         raise ValueError(f"Medallion Pipeline strictly processes 'BTC-USDT', but received: {symbol}")
 
-    bronze_path = get_bronze_trades_path(symbol)
-    silver_path = get_silver_trades_path(symbol)
+    bronze_path = bronze_path or get_bronze_trades_path(symbol)
+    silver_path = silver_path or get_silver_trades_path(symbol)
 
     print("=" * 80)
     print("MEDALLION BATCH LAYER: BRONZE -> SILVER CLEANING")
@@ -68,7 +133,7 @@ def process_bronze_to_silver(
     is_local = not bronze_path.startswith("s3a://") and not bronze_path.startswith("s3://")
     if is_local:
         local_p = Path(bronze_path)
-        if not local_p.exists() or not any(local_p.rglob("*.parquet")):
+        if not local_p.exists() or not (local_p.is_file() and local_p.suffix==".parquet" or any(local_p.rglob("*.parquet"))):
             print(f"[INFO] Bronze path does not exist or has no parquet files ({bronze_path}). Initial run.")
             return {"total": 0, "valid": 0, "rejected": 0, "status": "no_data"}
         try:
@@ -95,67 +160,13 @@ def process_bronze_to_silver(
         print("[!] No records found in Bronze layer to process.")
         return {"total": 0, "valid": 0, "rejected": 0, "status": "empty"}
 
-    # 1. Parse JSON payload if raw Kafka payload exists, otherwise use tabular columns
-    if "raw_payload" in raw_df.columns:
-        parsed_df = (
-            raw_df
-            .withColumn("parsed", from_json(col("raw_payload"), RAW_TRADE_SCHEMA))
-            .select(
-                col("parsed.trade_id").alias("trade_id"),
-                col("parsed.symbol").alias("symbol"),
-                col("parsed.price").alias("price"),
-                col("parsed.size").alias("size"),
-                col("parsed.side").alias("side"),
-                col("parsed.timestamp").alias("raw_timestamp"),
-                col("kafka_partition"),
-                col("kafka_offset"),
-                col("kafka_timestamp").alias("kafka_arrival_time")
-            )
-        )
-    else:
-        parsed_df = raw_df
-
-    # 2. Strict Silver Validation Conditions (reject NaN, Inf, non-BTC, negative/zero prices, empty trade_ids)
-    is_valid_condition = (
-        col("trade_id").isNotNull() & (trim(col("trade_id")) != "") &
-        col("symbol").isNotNull() & (col("symbol") == "BTC-USDT") &
-        col("price").isNotNull() & (~isnan(col("price"))) & (col("price") > 0.0) & (col("price") < float("inf")) &
-        col("size").isNotNull() & (~isnan(col("size"))) & (col("size") > 0.0) & (col("size") < float("inf")) &
-        col("raw_timestamp").isNotNull() & (col("raw_timestamp") > 0) &
-        col("side").isNotNull() & col("side").isin("buy", "sell")
-    )
-
-    valid_df = parsed_df.filter(is_valid_condition.isNotNull() & is_valid_condition)
-    invalid_df = parsed_df.filter(is_valid_condition.isNull() | (~is_valid_condition))
-
+    parsed_df, invalid_df, valid_df, cleaned_df = transform_bronze_trades(raw_df)
     rejected_count = invalid_df.count()
-    if rejected_count > 0:
-        print(f"[WARN] Detected and isolated {rejected_count} invalid records from Bronze (excluded from Silver).")
-
-    from pyspark.sql.window import Window
-    from pyspark.sql.functions import row_number
-
     valid_before_dedup = valid_df.count()
-
-    # 3. Standardization & Deterministic Deduplication on trade_id
-    # If conflicting records exist with same trade_id, preserve latest raw_timestamp / highest kafka_offset
-    sort_cols = [col("raw_timestamp").desc()]
-    if "kafka_offset" in valid_df.columns:
-        sort_cols.append(col("kafka_offset").desc_nulls_last())
-    dedup_window = Window.partitionBy("trade_id").orderBy(*sort_cols)
-
-    cleaned_df = (
-        valid_df
-        .withColumn("trade_time", (col("raw_timestamp") / 1000.0).cast("timestamp"))
-        .withColumn("trade_value", col("price") * col("size"))
-        .withColumn("trade_date", date_format(col("trade_time"), "yyyy-MM-dd"))
-        .withColumn("_row_num", row_number().over(dedup_window))
-        .filter(col("_row_num") == 1)
-        .drop("_row_num")
-    )
-
     valid_count = cleaned_df.count()
     duplicates_count = valid_before_dedup - valid_count
+    if total_records != rejected_count + duplicates_count + valid_count:
+        raise RuntimeError("Cleaning counts do not balance")
 
     # 3. Write to Silver Parquet with Dynamic Partition Overwrite (idempotent; only touched partitions replaced)
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")

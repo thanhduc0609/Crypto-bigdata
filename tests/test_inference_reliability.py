@@ -1,223 +1,141 @@
-"""
-=============================================================================
-Test Suite: Live Inference Reliability, Finalized Candles & Outcome Backfill
-=============================================================================
-Tests:
-  1. Finalized Candle Enforcement: in-flight unclosed candles are strictly rejected.
-  2. Feature Warmup Protection: ensures at least 26 candles exist before inference.
-  3. Delayed Event Handling: handles out-of-order candles gracefully by chronological sort.
-  4. Restart Recovery & Idempotency: multiple predictions for same candle update, not duplicate.
-  5. Outcome Resolution & Zero Lookahead: ensures future price is strictly evaluated after target time.
-=============================================================================
-"""
-
+"""Inference gates and real PostgreSQL outcome resolution, without target tampering."""
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from pathlib import Path
+from unittest.mock import patch
+import unittest
 import pandas as pd
-import numpy as np
 
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+ROOT=Path(__file__).resolve().parent.parent
+sys.path.insert(0,str(ROOT))
+from test_support.postgres_sandbox import PostgresRegressionCase
+from test_support.candles import canonical_candles,prediction_clock
+import ml.predict as predictor
+from warehouse.etl.streaming_sink import write_candles_batch,write_historical_candles_batch
 
-from ml.predict import run_single_prediction, backfill_actual_outcomes
-from warehouse.etl.db_config import get_db_connection
 
+class InferenceReliabilityTests(PostgresRegressionCase):
+    suite_name='inference'
 
-def create_test_candles(n: int = 40, base_time: datetime = None) -> pd.DataFrame:
-    """Creates a deterministic sequence of n 1m candles for testing."""
-    if base_time is None:
-        base_time = datetime.now(timezone.utc) - timedelta(minutes=n)
-    
-    records = []
-    price = 85000.0
-    for i in range(n):
-        t_start = base_time + timedelta(minutes=i)
-        t_end = t_start + timedelta(minutes=1)
-        price += (i % 5 - 2) * 10.0
-        records.append({
-            "symbol": "BTC-USDT",
-            "window_start": t_start,
-            "window_end": t_end,
-            "open": price,
-            "high": price + 15.0,
-            "low": price - 15.0,
-            "close": price + 5.0,
-            "volume": 10.0 + (i % 3),
-            "total_trade_value": price * 10.0,
-            "source": "realtime_stream"
-        })
-    return pd.DataFrame(records)
+    def predict(self,minutes_ago=0):
+        moment=self.reference_time-timedelta(minutes=minutes_ago)
+        candles=canonical_candles(40,moment)
+        with prediction_clock(moment):
+            result=predictor.run_prediction_detailed(candles,check_duplicate=True)
+        self.assertTrue(result['success'],result)
+        return result['prediction'],candles
+
+    def target_candle(self,prediction,**changes):
+        target=prediction['target_timestamp']
+        # Use cent precision so the NUMERIC warehouse roundtrip stays exact.
+        price=round(prediction['current_price']+500,2)
+        row={'symbol':'BTC-USDT','window_start':target,'window_end':target+timedelta(minutes=1),
+             'open':price-20,'high':price+20,'low':price-40,'close':price,'volume':25.0,
+             'total_trade_value':price*25,'source':'historical_rest','is_closed':True}
+        row.update(changes)
+        return row
+
+    def pending_state(self):
+        return self.query('SELECT actual_direction,is_correct,actual_future_price FROM warehouse.fact_btc_predictions')[0]
+
+    def test_01_explicit_unclosed_input_is_rejected_not_silently_used(self):
+        candles=canonical_candles(40,self.reference_time)
+        candles.loc[candles.index[-1],'is_closed']=False
+        with prediction_clock(self.reference_time):
+            result=predictor.run_prediction_detailed(candles,check_duplicate=False)
+        self.assertFalse(result['success'])
+        self.assertEqual(result['code'],'UNCLOSED_CANDLE')
+        self.assertEqual(self.query('SELECT count(*) FROM warehouse.fact_btc_predictions')[0][0],0)
+
+    def test_02_stream_or_missing_provenance_is_rejected(self):
+        base=canonical_candles(40,self.reference_time)
+        for candles in (base.assign(source='realtime_stream'),base.drop(columns='source')):
+            with self.subTest(columns=list(candles.columns)),prediction_clock(self.reference_time):
+                result=predictor.run_prediction_detailed(candles,check_duplicate=False)
+                self.assertFalse(result['success'])
+                self.assertEqual(result['code'],'UNCLOSED_CANDLE')
+
+    def test_03_short_history_gets_specific_rejection(self):
+        with prediction_clock(self.reference_time):
+            result=predictor.run_prediction_detailed(canonical_candles(15,self.reference_time),check_duplicate=False)
+        self.assertFalse(result['success'])
+        self.assertEqual(result['code'],'INSUFFICIENT_HISTORY')
+
+    def test_04_out_of_order_input_preserves_prediction(self):
+        candles=canonical_candles(40,self.reference_time)
+        shuffled=candles.sample(frac=1,random_state=42).reset_index(drop=True)
+        with prediction_clock(self.reference_time):
+            a=predictor.run_single_prediction(candles)
+            b=predictor.run_single_prediction(shuffled)
+        self.assertIsNotNone(a);self.assertIsNotNone(b)
+        for key in ('feature_timestamp','target_timestamp','predicted_direction','probability_up','probability_not_up'):
+            self.assertEqual(a[key],b[key])
+        self.assertEqual(self.query('SELECT count(*) FROM warehouse.fact_btc_predictions')[0][0],1)
+
+    def test_05_clearing_model_cache_keeps_idempotent_persisted_prediction(self):
+        prediction,candles=self.predict()
+        before=self.query('SELECT * FROM warehouse.fact_btc_predictions')[0]
+        with patch.object(predictor,'_cached_model',None),patch.object(predictor,'_cached_features',None),prediction_clock(self.reference_time):
+            second=predictor.run_prediction_detailed(candles,check_duplicate=True)
+        self.assertTrue(second['success'])
+        self.assertTrue(second['already_predicted'])
+        self.assertEqual(second['prediction']['feature_timestamp'],prediction['feature_timestamp'])
+        self.assertEqual(self.query('SELECT * FROM warehouse.fact_btc_predictions'),[before])
+
+    def test_06_future_target_cannot_be_scored_even_if_input_claims_closed(self):
+        prediction,_=self.predict()
+        future=pd.DataFrame([self.target_candle(prediction)])
+        self.assertGreater(prediction['target_timestamp'],self.reference_time)
+        self.assertEqual(predictor.evaluate_unresolved_predictions(future),0)
+        self.assertEqual(self.pending_state(),(None,None,None))
+
+    def test_07_mature_exact_confirmed_outcome_is_scored_once(self):
+        prediction,_=self.predict(minutes_ago=10)
+        target=self.target_candle(prediction)
+        self.assertEqual(prediction['target_timestamp']-prediction['feature_timestamp'],timedelta(minutes=5))
+        self.assertEqual(self.pending_state(),(None,None,None))
+        drift={**target,'window_start':target['window_start']+timedelta(seconds=30)}
+        self.assertEqual(predictor.evaluate_unresolved_predictions(pd.DataFrame([drift])),0)
+        self.assertEqual(predictor.evaluate_unresolved_predictions(pd.DataFrame([{**target,'is_closed':False}])),0)
+        self.assertEqual(self.pending_state(),(None,None,None))
+        self.assertEqual(predictor.evaluate_unresolved_predictions(pd.DataFrame([target])),1)
+        outcome=self.pending_state()
+        self.assertEqual(outcome,(1,prediction['predicted_direction']==1,target['close']))
+        self.assertEqual(predictor.evaluate_unresolved_predictions(pd.DataFrame([{**target,'close':target['close']+1000}])),0)
+        self.assertEqual(self.pending_state(),outcome)
+
+    def test_08_streaming_dw_target_is_not_authoritative_actual(self):
+        prediction,_=self.predict(minutes_ago=10)
+        target=self.target_candle(prediction)
+        write_candles_batch([{**target,'source':'realtime_stream','trade_count':50}])
+        self.assertEqual(predictor.evaluate_unresolved_predictions(),0)
+        self.assertEqual(self.pending_state(),(None,None,None))
+        write_historical_candles_batch([target])
+        self.assertEqual(predictor.evaluate_unresolved_predictions(),1)
+        self.assertEqual(self.pending_state()[2],target['close'])
+
+    def test_09_outcome_requires_explicit_provenance(self):
+        prediction,_=self.predict(minutes_ago=10)
+        target=self.target_candle(prediction)
+        missing=pd.DataFrame([target]).drop(columns='source')
+        self.assertEqual(predictor.evaluate_unresolved_predictions(missing),0)
+        self.assertEqual(self.pending_state(),(None,None,None))
+        self.assertEqual(predictor.evaluate_unresolved_predictions(pd.DataFrame([target])),1)
+
+    def test_10_nonfinite_or_nonpositive_actual_price_is_never_scored(self):
+        for price in (float('nan'),float('inf'),0.0,-1.0):
+            with self.subTest(price=price):
+                self.db.reset()
+                prediction,_=self.predict(minutes_ago=10)
+                target=self.target_candle(prediction,close=price)
+                self.assertEqual(predictor.evaluate_unresolved_predictions(pd.DataFrame([target])),0)
+                self.assertEqual(self.pending_state(),(None,None,None))
 
 
 def run_inference_reliability_tests():
-    print("=" * 80)
-    print("TEST SUITE: INFERENCE RELIABILITY & FINALIZED CANDLE VALIDATION")
-    print("=" * 80)
-
-    passed = 0
-    total = 5
-
-    # -------------------------------------------------------------------------
-    # TEST 1: In-Flight Candle Rejection (Finalized Candle Enforcement)
-    # -------------------------------------------------------------------------
-    print("\n--- TEST 1: FINALIZED CANDLE ENFORCEMENT ---")
-    now_utc = datetime.now(timezone.utc)
-    # Create 35 finalized candles and 1 in-flight candle whose window_end is in the future
-    base_t = now_utc - timedelta(minutes=34)
-    candles_35 = create_test_candles(n=35, base_time=base_t)
-    
-    # Add an unclosed in-flight candle (window_end 30 seconds into the future)
-    in_flight_start = now_utc.replace(second=0, microsecond=0)
-    in_flight_end = in_flight_start + timedelta(minutes=1)
-    in_flight_row = pd.DataFrame([{
-        "symbol": "BTC-USDT",
-        "window_start": in_flight_start,
-        "window_end": in_flight_end,
-        "open": 89999.0,
-        "high": 90000.0,
-        "low": 89990.0,
-        "close": 89999.0,
-        "volume": 0.5,
-        "total_trade_value": 45000.0,
-        "source": "realtime_stream"
-    }])
-    candles_with_inflight = pd.concat([candles_35, in_flight_row], ignore_index=True)
-
-    pred1 = run_single_prediction(candles_with_inflight)
-    assert pred1 is not None, "Prediction returned None."
-    # The feature timestamp MUST be the finalized candle, NOT the in-flight candle
-    pred_feat_ts = pd.to_datetime(pred1["feature_timestamp"]).astimezone(timezone.utc)
-    in_flight_ts = in_flight_start.astimezone(timezone.utc)
-    print(f"[*] In-flight candle time : {in_flight_ts}")
-    print(f"[*] Used prediction time  : {pred_feat_ts}")
-    assert pred_feat_ts < in_flight_ts, f"In-flight candle was improperly used for prediction! ({pred_feat_ts} >= {in_flight_ts})"
-    print("[PASS] Test 1: In-flight candle safely discarded. Only finalized candle used for inference.")
-    passed += 1
-
-    # -------------------------------------------------------------------------
-    # TEST 2: Warmup Buffer Protection (< 26 candles)
-    # -------------------------------------------------------------------------
-    print("\n--- TEST 2: WARMUP BUFFER PROTECTION ---")
-    short_candles = create_test_candles(n=15)
-    pred2 = run_single_prediction(short_candles)
-    assert pred2 is None, f"Expected None for insufficient warmup buffer, got {pred2}"
-    print("[PASS] Test 2: Inference correctly refused when warmup buffer is < 26 candles.")
-    passed += 1
-
-    # -------------------------------------------------------------------------
-    # TEST 3: Delayed & Out-of-Order Event Handling
-    # -------------------------------------------------------------------------
-    print("\n--- TEST 3: DELAYED & OUT-OF-ORDER CANDLE HANDLING ---")
-    valid_candles = create_test_candles(n=35)
-    # Shuffle order to simulate delayed arrival
-    shuffled_candles = valid_candles.sample(frac=1.0, random_state=42).reset_index(drop=True)
-    pred3 = run_single_prediction(shuffled_candles)
-    assert pred3 is not None, "Failed prediction on shuffled dataframe."
-    # Compare with prediction on in-order dataframe
-    pred3_orig = run_single_prediction(valid_candles)
-    assert pred3["feature_timestamp"] == pred3_orig["feature_timestamp"], "Timestamp mismatch on shuffled data!"
-    assert pred3["predicted_direction"] == pred3_orig["predicted_direction"], "Direction mismatch on shuffled data!"
-    print(f"[PASS] Test 3: Out-of-order candles sorted chronologically. Direction={pred3['direction_label']}, P(UP)={pred3['probability_up']}")
-    passed += 1
-
-    # -------------------------------------------------------------------------
-    # TEST 4: Restart Recovery & Prediction Idempotency
-    # -------------------------------------------------------------------------
-    print("\n--- TEST 4: RESTART RECOVERY & IDEMPOTENCY ---")
-    conn = get_db_connection()
-    conn.autocommit = True
-    cur = conn.cursor()
-    try:
-        # Count records before second call
-        feat_time = pred3["feature_timestamp"]
-        cur.execute(
-            "SELECT count(*) FROM warehouse.fact_btc_predictions WHERE symbol = 'BTC-USDT' AND feature_timestamp = %s;",
-            (feat_time,)
-        )
-        count_before = cur.fetchone()[0]
-        assert count_before == 1, f"Expected exactly 1 prediction row, found {count_before}"
-
-        # Call prediction again for the exact same candles
-        run_single_prediction(valid_candles)
-
-        cur.execute(
-            "SELECT count(*) FROM warehouse.fact_btc_predictions WHERE symbol = 'BTC-USDT' AND feature_timestamp = %s;",
-            (feat_time,)
-        )
-        count_after = cur.fetchone()[0]
-        assert count_after == 1, f"Duplicate prediction inserted! Expected 1, found {count_after}"
-        print(f"[PASS] Test 4: Idempotent upsert verified. Repeated inference on same timestamp did not duplicate.")
-        passed += 1
-
-        # ---------------------------------------------------------------------
-        # TEST 5: Outcome Resolution & Zero Lookahead Verification
-        # ---------------------------------------------------------------------
-        print("\n--- TEST 5: OUTCOME RESOLUTION & ZERO LOOKAHEAD ---")
-        # Check that the prediction has no actual outcome initially
-        cur.execute(
-            "SELECT actual_direction, is_correct, target_timestamp, prediction_timestamp FROM warehouse.fact_btc_predictions WHERE symbol = 'BTC-USDT' AND feature_timestamp = %s;",
-            (feat_time,)
-        )
-        row = cur.fetchone()
-        actual_dir, is_correct, target_ts, pred_ts = row[0], row[1], row[2], row[3]
-        print(f"[*] Initial state: Actual Direction = {actual_dir}, Target Time = {target_ts}")
-        assert actual_dir is None, "Lookahead bias detected! Actual direction was prematurely set at prediction time."
-        assert is_correct is None, "Lookahead bias detected! is_correct was set at prediction time."
-        
-        # Now simulate 5 minutes passing by inserting the target candle
-        # Now simulate 5 minutes passing by updating target_timestamp to the past
-        # and inserting the target candle with known future price $86,200.00
-        past_target_time = datetime.now(timezone.utc) - timedelta(seconds=10)
-        cur.execute(
-            "UPDATE warehouse.fact_btc_predictions SET target_timestamp = %s WHERE symbol = 'BTC-USDT' AND feature_timestamp = %s;",
-            (past_target_time, feat_time)
-        )
-
-        resolved_candles = pd.concat([valid_candles, pd.DataFrame([{
-            "symbol": "BTC-USDT",
-            "window_start": past_target_time,
-            "window_end": past_target_time + timedelta(minutes=1),
-            "open": 86000.0,
-            "high": 86500.0,
-            "low": 85900.0,
-            "close": 86200.0,  # higher than entry price -> UP (1)
-            "volume": 25.0,
-            "total_trade_value": 2155000.0
-        }])], ignore_index=True)
-
-        backfill_actual_outcomes(resolved_candles)
-
-        cur.execute(
-            "SELECT actual_direction, is_correct, actual_future_price FROM warehouse.fact_btc_predictions WHERE symbol = 'BTC-USDT' AND feature_timestamp = %s;",
-            (feat_time,)
-        )
-        res_row = cur.fetchone()
-        print(f"[*] Resolved state: Actual Direction = {res_row[0]}, is_correct = {res_row[1]}, Future Price = ${res_row[2]}")
-        assert res_row[0] is not None, "Outcome resolution failed: actual_direction is still None."
-        assert res_row[1] is not None, "Outcome resolution failed: is_correct is still None."
-        assert float(res_row[2]) == 86200.0, f"Future price mismatch: expected 86200.0, got {res_row[2]}"
-        print("[PASS] Test 5: Future outcome resolution verified strictly after horizon elapsed.")
-        passed += 1
-
-        print("\n" + "=" * 80)
-        print(f"INFERENCE RELIABILITY SUMMARY: {passed}/{total} TESTS PASSED (100.0%)")
-        print("=" * 80)
-        return True
-
-    finally:
-        # Cleanup test prediction row
-        if "feat_time" in locals():
-            cur.execute(
-                "DELETE FROM warehouse.fact_btc_predictions WHERE symbol = 'BTC-USDT' AND feature_timestamp = %s;",
-                (feat_time,)
-            )
-            conn.commit()
-        cur.close()
-        conn.close()
+    return unittest.TextTestRunner(verbosity=2).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(InferenceReliabilityTests)).wasSuccessful()
 
 
-if __name__ == "__main__":
-    success = run_inference_reliability_tests()
-    sys.exit(0 if success else 1)
+if __name__=='__main__':
+    sys.exit(0 if run_inference_reliability_tests() else 1)

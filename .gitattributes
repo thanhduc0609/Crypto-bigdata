@@ -1,0 +1,18 @@
+* text=auto eol=lf
+*.zip -text
+*.parquet -text
+*.joblib -text
+*.dll -text
+*.exe -text
+# These historical artifacts/sources are bound by raw-byte SHA-256 manifests.
+# Preserve their exact LF/CRLF bytes across Windows and Linux checkouts.
+ml/artifacts/** -text whitespace=cr-at-eol
+configs/short_term_experiment.json -text
+configs/ml_review.json -text whitespace=cr-at-eol
+ml/short_term_experiment.py -text
+ml/short_term_features.py -text
+ml/short_term_metrics.py -text
+ml/locked_dataset.py -text
+# Two original end-of-line spaces in this frozen source are part of its checksum.
+processing/features/feature_engineering.py -text whitespace=cr-at-eol,-blank-at-eol
+ml/long_term_research.py -text

@@ -113,7 +113,7 @@ def process_crypto_streams(spark: SparkSession):
         .option("kafka.bootstrap.servers", KAFKA_SERVER)
         .option("subscribe", KAFKA_TOPIC)
         .option("startingOffsets", "latest")
-        .option("failOnDataLoss", "false")
+        .option("failOnDataLoss", os.getenv("KAFKA_FAIL_ON_DATA_LOSS", "true"))
         .load()
     )
 
@@ -289,8 +289,9 @@ def process_crypto_streams(spark: SparkSession):
         queries.append(processed_s3_query)
 
     print("\n>>> Speed Layer is actively streaming. Press CTRL + C to stop.\n")
-    for q in queries:
-        q.awaitTermination()
+    # Watching queries one-by-one can hide a failed DW sink behind a still-live
+    # first query. Include the separately started Bronze query in the same check.
+    spark.streams.awaitAnyTermination()
 
 
 if __name__ == "__main__":

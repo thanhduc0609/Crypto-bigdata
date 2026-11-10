@@ -4,47 +4,128 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BTC Trading Terminal — Dự báo & Kế hoạch Futures</title>
+    <title>{{ page_title }}</title>
     <!-- TradingView Lightweight Charts -->
-    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    {% if page == "market" %}<script src="/static/vendor/lightweight-charts-4.1.3.js"></script>{% endif %}
     <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/research.css">
 </head>
 
-<body class="theme-light theme-terminal">
+<body class="theme-light theme-terminal page-{{ page }}">
+    <a class="skip-link" href="#main-content">Đến nội dung chính</a>
     <div class="terminal-container">
 
         <!-- AREA A: HEADER -->
         <header class="terminal-header">
             <div class="header-left">
                 <div class="instrument-title">
-                    <span class="ticker-symbol">BTC</span>
-                    <span class="ticker-type">Spot (BTC-USDT) & Perpetual (BTC-USDT-SWAP)</span>
+                    <span class="ticker-symbol">BTC-USDT</span>
+                    <span class="ticker-type">Phân tích dữ liệu & dự báo · Nguồn OKX</span>
                 </div>
-                <div class="header-prices">
+                {% if page == "market" %}<div class="header-prices">
                     <div class="price-block">
                         <span class="price-val tabular" id="ov-price">—</span>
                         <span class="price-currency">USDT</span>
                         <span class="change-tag tabular" id="ov-change">—</span>
                     </div>
-                    <div class="basis-block" id="futures-basis-wrap"
-                        title="Độ lệch giữa giá Hợp đồng phái sinh và giá Giao ngay (Perpetual - Spot)">
-                        <span class="meta-label">Basis:</span>
-                        <span class="basis-val tabular" id="header-basis">—</span>
-                    </div>
                 </div>
+                {% endif %}
             </div>
 
             <div class="header-right">
-                <div class="timestamp-block">
+                {% if page == "market" %}<div class="timestamp-block">
                     <span class="meta-label">Dữ liệu:</span>
                     <span class="time-val tabular" id="provenance-fetch-ts">—</span>
                 </div>
+                {% else %}<span class="research-badge">Nghiên cứu dữ liệu · Lịch UTC</span>{% endif %}
                 <button id="btn-refresh" class="btn btn-refresh" title="Làm mới toàn bộ dữ liệu">
                     <span id="btn-refresh-text">Làm mới</span>
                 </button>
             </div>
         </header>
 
+        <nav class="research-nav" aria-label="Điều hướng dự án">
+            <a href="/du-bao-3-nam" {% if page == "forecast" %}aria-current="page"{% endif %}><span class="nav-number">01</span> Dự báo 3 năm</a>
+            <a href="/thi-truong" {% if page == "market" %}aria-current="page"{% endif %}><span class="nav-number">02</span> Phân tích thị trường</a>
+        </nav>
+        <main id="main-content">
+        <div class="page-intro">
+            <span class="eyebrow">ĐỒ ÁN PHÂN TÍCH DỮ LIỆU LỚN · BTC-USDT</span>
+            <h1>{{ 'Từ dữ liệu lịch sử đến dự báo 3 năm' if page == 'forecast' else 'Quan sát thị trường qua dữ liệu' }}</h1>
+            <p>{{ 'Khám phá lịch sử theo tháng, kiểm định mô hình và đánh giá bất định trong 36 tháng tiếp theo.' if page == 'forecast' else 'Giá, khối lượng, dòng mua/bán và giao dịch lớn. Dự báo 5 phút là phần nghiên cứu mở rộng.' }}</p>
+        </div>
+        <details class="card system-disclosure">
+            <summary><span class="system-heading">Luồng dữ liệu &amp; chất lượng</span><span id="pipeline-measured" role="status">Đang đọc phép đo…</span><span class="disclosure-action">Xem chi tiết</span></summary>
+            <section class="evidence-panel" aria-labelledby="pipeline-title">
+                <h2 id="pipeline-title">Kiểm chứng từng chặng xử lý</h2>
+                <p class="lt-explanation">Đo Kafka, checkpoint Spark, phiên Silver/Gold và PostgreSQL độc lập với biểu đồ thị trường.</p>
+                <div id="pipeline-stages" class="evidence-grid"></div>
+                <p class="evidence-note">Nến thị trường có thể lấy trực tiếp từ OKX. Các số đo ở đây giúp kiểm chứng luồng xử lý phía sau; không suy ra hệ thống hoạt động chỉ từ biểu đồ.</p>
+                <details class="lt-details"><summary>Dữ liệu nghiên cứu và thống kê làm sạch</summary>
+                    <div id="pipeline-data-quality">Chưa có số liệu đã xác minh.</div>
+                </details>
+            </section>
+        </details>
+
+        {% if page == "forecast" %}
+        <section class="card long-term-panel" aria-labelledby="lt-title">
+            <div class="lt-heading">
+                <div><h2 id="lt-title">Dự báo BTC trong 3 năm</h2><p>Giá đóng cửa từng tháng · 36 tháng · BTC-USDT · Lịch tháng UTC</p></div>
+                <a class="btn btn-sm" href="/api/forecast/long-term/export">Tải 36 tháng CSV</a>
+            </div>
+            <p id="lt-status" role="status">Đang tải dữ liệu lịch sử và kết quả đánh giá...</p>
+            <div id="lt-content" hidden>
+                <div class="lt-summary" id="lt-summary"></div>
+                <p class="lt-explanation">Cùng dữ liệu BTC-USDT từ OKX: nến ngày → nến tháng → giá đóng cửa tháng → dự báo. Trang <a href="/thi-truong">Phân tích thị trường</a> hiển thị nến phút/giờ/ngày; tháng đang chạy chưa được coi là tháng hoàn tất.</p>
+                <ol id="lt-split" class="lt-split" aria-label="Các bước kiểm định và dự báo"></ol>
+                <div class="lt-controls"><div role="group" aria-label="Chọn biểu đồ dự báo">
+                    <button type="button" class="btn btn-sm lt-view active" data-view="forecast" aria-pressed="true">Dự báo 36 tháng tới</button>
+                    <button type="button" class="btn btn-sm lt-view" data-view="backtest" aria-pressed="false">Kiểm định 36 tháng quá khứ</button>
+                </div></div>
+                <div class="lt-controls lt-chart-controls">
+                    <label>Hiển thị lịch sử <select id="lt-style"><option value="close">Đường giá đóng cửa tháng</option><option value="candles">Nến tháng (OHLC)</option></select></label>
+                    <label>Trục giá <select id="lt-scale"><option value="log">Logarithm — so sánh tỷ lệ</option><option value="linear">Thông thường — USDT</option></select></label>
+                    <label><input id="lt-bands" type="checkbox" checked> Hiện dải bất định</label>
+                </div>
+                <div class="lt-legend"><span>● Lịch sử / thực tế (hoặc nến tháng)</span><span class="lt-pred-key">● Dự báo giá đóng cửa</span><span class="lt-baseline-key" hidden>┄ Baseline giữ giá cuối</span><span class="lt-band-key">▰ Dải danh nghĩa 80% và 95%</span></div>
+                <div class="lt-navigation" role="group" aria-label="Khoảng thời gian hiển thị">
+                    <div class="lt-presets">
+                        <button type="button" class="btn btn-sm lt-range active" data-range="all" aria-pressed="true">Toàn bộ</button>
+                        <button type="button" class="btn btn-sm lt-range" data-range="five-years" aria-pressed="false">5 năm gần nhất</button>
+                        <button type="button" class="btn btn-sm lt-range" data-range="recent-forecast" aria-pressed="false">Lịch sử gần đây + 36 tháng dự báo</button>
+                    </div>
+                    <div class="lt-zoom-controls">
+                        <button type="button" id="lt-zoom-out" class="btn btn-sm" aria-label="Thu nhỏ biểu đồ">−</button>
+                        <button type="button" id="lt-zoom-in" class="btn btn-sm" aria-label="Phóng to biểu đồ">+</button>
+                        <button type="button" id="lt-reset" class="btn btn-sm">Khôi phục góc nhìn</button>
+                    </div>
+                </div>
+                <p id="lt-interaction-help" class="chart-help">Lăn chuột để thu phóng · Kéo ngang để di chuyển · Rê chuột/chạm để xem giá. Bàn phím: + / −, ← / →, Home.</p>
+                <div class="lt-chart-wrap">
+                    <svg id="lt-chart" viewBox="0 0 1000 430" role="img" tabindex="0" aria-describedby="lt-interaction-help lt-boundary-status" aria-label="Biểu đồ tương tác lịch sử và dự báo giá đóng cửa BTC từng tháng"></svg>
+                    <div id="lt-tooltip" class="lt-tooltip" hidden></div>
+                </div>
+                <div class="lt-range-info"><span id="lt-range-status" role="status"></span><span id="lt-boundary-status"></span></div>
+                <p class="lt-caption" id="lt-chart-caption"></p><p id="lt-evaluation"></p>
+                <details class="lt-details"><summary>Chất lượng dự báo và so sánh mô hình</summary>
+                    <p class="lt-explanation">MAE là mức lệch tuyệt đối trung bình giữa giá dự báo và giá thật, tính bằng USDT. MAE/RMSE càng thấp càng tốt. sMAPE là một thước đo sai số phần trăm, không phải tỷ lệ dự báo đúng. Độ phủ 95% không có nghĩa mô hình chính xác 95%.</p>
+                    <div class="table-container"><table class="terminal-table"><thead><tr><th>Phương pháp</th><th>Vai trò</th><th class="num-col">MAE (USDT)</th><th class="num-col">RMSE (USDT)</th><th class="num-col">sMAPE (%)</th></tr></thead><tbody id="lt-comparison"></tbody></table></div>
+                    <p id="lt-interval-quality" class="lt-explanation"></p>
+                    <p class="lt-explanation">Bảng test là kết quả thí nghiệm; không đổi mô hình theo cột test sau khi đã nhìn kết quả. Dự báo tương lai chưa có giá thật để chấm độ chính xác.</p>
+                    <a href="/api/forecast/long-term/evaluation/export">Tải bảng đánh giá mô hình CSV</a>
+                </details>
+                <details class="lt-details"><summary>Đánh giá bổ sung: 3 mốc dự báo đủ 36 tháng (hồi cứu)</summary>
+                    <div id="lt-research-content">Đang tải kết quả đã xác minh…</div>
+                </details>
+                <p class="lt-note">Dải dự báo biểu diễn bất định theo giả định mô hình; không bảo đảm độ phủ tương lai. Kết quả phục vụ phân tích đồ án.</p>
+                <details class="lt-details"><summary>Bảng dự báo và khoảng bất định theo từng tháng</summary>
+                    <div class="table-container"><table class="terminal-table"><thead><tr><th>Tháng (UTC)</th><th class="num-col">Dự báo (USDT)</th><th class="num-col">Dải 80%</th><th class="num-col">Dải 95%</th></tr></thead><tbody id="lt-table"></tbody></table></div>
+                </details>
+                <details class="lt-details"><summary>Nguồn dữ liệu, phương pháp và giới hạn</summary><div id="lt-method"></div></details>
+            </div>
+        </section>
+
+        {% else %}
         <!-- CONNECTION ISSUE BANNER (Only displayed when there is a real issue) -->
         <div class="alert-banner" id="connection-alert" style="display: none;">
             <span class="alert-icon">!</span>
@@ -60,7 +141,7 @@
                     <div class="timeframe-group">
                         <button class="tf-btn active" data-tf="1m">1 phút</button>
                         <button class="tf-btn" data-tf="1h">1 giờ</button>
-                        <button class="tf-btn" data-tf="1d">1 ngày</button>
+                        <button class="tf-btn" data-tf="1d">1 ngày UTC</button>
                     </div>
                     <div class="chart-options">
                         <label class="toggle-control">
@@ -68,6 +149,10 @@
                             <span>VWAP</span>
                         </label>
                     </div>
+                </div>
+
+                <div class="candle-provenance" id="candle-provenance" role="status" aria-live="polite" data-state="loading">
+                    Đang tải nến… Nguồn và độ mới sẽ hiển thị tại đây.
                 </div>
 
                 <!-- Single-Line Crosshair Inspect Bar -->
@@ -104,6 +189,11 @@
                     <div class="card-title-row">
                         <h2 class="subcard-title">Dự báo hướng giá (+5 phút)</h2>
                     </div>
+                    <p class="evidence-note">Phần mở rộng ngắn hạn. Kết quả này độc lập với trang <a href="/du-bao-3-nam">Dự báo 3 năm</a>.</p>
+
+                    <details class="lt-details"><summary>Chất lượng mô hình đang chạy và thí nghiệm mới</summary>
+                        <div id="ml-review-content">Đang tải đánh giá đã xác minh…</div>
+                    </details>
 
                     <!-- Direction Hero Box -->
                     <div class="direction-badge-container">
@@ -145,10 +235,14 @@
                 </div>
 
                 <!-- 2. Futures Plan Block -->
-                <div class="hero-subcard futures-subcard">
+                <details class="hero-subcard futures-subcard">
+                    <summary class="extension-summary">Mở rộng thử nghiệm · Futures</summary>
                     <div class="card-title-row">
                         <h2 class="subcard-title">Kế hoạch giao dịch Futures</h2>
                         <span class="instrument-tag">BTC-USDT-SWAP</span>
+                    </div>
+                    <div class="basis-block" id="futures-basis-wrap" title="Độ lệch giá hợp đồng phái sinh so với Spot">
+                        <span class="meta-label">Basis:</span><span class="basis-val tabular" id="header-basis">—</span>
                     </div>
 
                     <div class="plan-action-row">
@@ -190,7 +284,7 @@
                         Kế hoạch thử nghiệm quy tắc kết hợp mô hình Spot và dòng lệnh Order Flow. Không phải lời khuyên
                         đầu tư.
                     </div>
-                </div>
+                </details>
 
             </div>
         </section>
@@ -253,7 +347,7 @@
             <!-- Col 3: Large Trades Donut Chart -->
             <div class="analytics-card card">
                 <div class="card-header-compact">
-                    <h3 class="card-heading">Cơ cấu giao dịch lớn (≥ $100K)</h3>
+                    <h3 class="card-heading" id="donut-heading">Cơ cấu giao dịch lớn (≥ 100.000 USDT)</h3>
                     <span class="micro-meta" id="donut-filter-desc">Toàn bộ tập lọc</span>
                 </div>
                 <div class="donut-chart-container">
@@ -289,7 +383,7 @@
             <div class="card trades-table-card">
                 <div class="trades-card-header">
                     <div class="tch-left">
-                        <h3 class="card-heading">Giao dịch lớn (≥ $100,000 USDT)</h3>
+                    <h3 class="card-heading" id="large-trades-heading">Giao dịch lớn (≥ 100.000 USDT)</h3>
                         <span class="micro-meta" id="trades-summary-inline">Tổng cộng: <strong class="tabular"
                                 id="trades-summary-count">—</strong> giao dịch (<strong class="tabular"
                                 id="trades-summary-value">— USDT</strong>)</span>
@@ -309,6 +403,7 @@
                                 <option value="1000000">≥ 1,000,000 USDT</option>
                             </select>
                             <button id="btn-export-trades" class="btn btn-secondary btn-sm">Xuất CSV</button>
+                            <span id="trades-export-feedback" class="evidence-note" role="status" aria-live="polite"></span>
                         </div>
                     </div>
                 </div>
@@ -406,10 +501,20 @@
 
         </section>
 
+        {% endif %}
+        </main>
+        <footer class="research-footer"><span>BTC-USDT · Nguồn dữ liệu OKX · Đơn vị giá USDT</span><span>Phân tích học thuật · Dự báo có bất định</span></footer>
     </div>
 
     <!-- Application JavaScript Client -->
+    {% if page == "market" %}
     <script src="/static/js/dashboard.js"></script>
+    {% else %}
+    <script src="/static/js/long_term_viewport.js"></script>
+    <script src="/static/js/long_term_chart.js"></script>
+    <script src="/static/js/long_term.js"></script>
+    {% endif %}
+    <script src="/static/js/evidence.js"></script>
 </body>
 
 </html>

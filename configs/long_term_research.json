@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_run": "20261108T142006113873Z",
+  "horizon_months": 36,
+  "outer_training_months": [60, 66, 69],
+  "inner_minimum_training_months": 24,
+  "inner_stride_months": 6,
+  "selection_metric": "mean_inner_fold_MASE",
+  "seed": 42,
+  "simulations": 1000,
+  "candidates": ["naive_last", "log_drift", "damped_log_trend", "ridge_returns", "ridge_strong", "anchored_ensemble"],
+  "ridge_strong_alpha": 100,
+  "ensemble_weights": {"naive_last": 0.5, "ridge_strong": 0.5},
+  "prior_exposure": "Historical 2023-2026 outcomes have already been examined. All results are retrospective research, not a new independent holdout.",
+  "interval_method": "Training-only centered one-step log residuals, circular 3-month blocks; nominal, uncalibrated, report width and coverage.",
+  "activation": "Report separately; do not rewrite the original frozen forecast or the 5-minute model."
+}

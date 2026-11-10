@@ -1,0 +1,4 @@
+﻿dataset,before,rejected,duplicates_removed,after,meaning
+crypto/bronze/trades,128,0,0,128,Production cleaning replay on frozen source; not an S3 publish
+crypto/local-runs/codex-20261106T032328Z/bronze/trades,15073,0,0,15073,Production cleaning replay on frozen source; not an S3 publish
+OKX daily / 20261108T142006113873Z,3224,1,0,3223,Replayed raw rows equal published daily/monthly Parquet

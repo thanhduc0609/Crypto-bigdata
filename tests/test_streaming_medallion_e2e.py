@@ -20,10 +20,10 @@ import os
 import sys
 import json
 import time
-import shutil
+import re
+from unittest.mock import patch
 from pathlib import Path
 from datetime import datetime, timezone
-import boto3
 import websocket
 from kafka import KafkaProducer, KafkaConsumer, TopicPartition
 
@@ -43,6 +43,7 @@ from storage.s3 import (
     get_gold_candles_path
 )
 from warehouse.etl.db_config import get_db_connection
+from test_support.s3_sandbox import S3TestSandbox, S3TestSafetyError
 
 load_env_vars()
 
@@ -91,9 +92,12 @@ def fetch_real_okx_trades(target_count: int = 15) -> list:
     return collected_trades
 
 
-def produce_trades_to_kafka(trades: list, topic: str = "crypto-trades") -> int:
+def produce_trades_to_kafka(trades: list, topic=None) -> int:
     """Publishes verified trades into Kafka topic."""
-    kafka_server = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    topic = topic or os.getenv('TEST_KAFKA_TOPIC','')
+    if not re.fullmatch(r'crypto-tests-[a-zA-Z0-9_-]+',topic):
+        raise S3TestSafetyError('A dedicated TEST_KAFKA_TOPIC named crypto-tests-* is required')
+    kafka_server = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9092")
     producer = KafkaProducer(
         bootstrap_servers=kafka_server,
         key_serializer=lambda k: k.encode("utf-8"),
@@ -111,28 +115,34 @@ def produce_trades_to_kafka(trades: list, topic: str = "crypto-trades") -> int:
 
 
 def run_e2e_streaming_test():
+    # Fail before creating S3 objects or connecting to live infrastructure unless
+    # the broader integration test has explicitly selected dedicated DB/topic.
+    test_db=os.getenv('TEST_POSTGRES_DB','')
+    topic=os.getenv('TEST_KAFKA_TOPIC','')
+    if not re.fullmatch(r'crypto_test_[a-z0-9_]{1,50}',test_db):
+        raise S3TestSafetyError('Set TEST_POSTGRES_DB=crypto_test_* to an initialized dedicated test database')
+    if not re.fullmatch(r'crypto-tests-[a-zA-Z0-9_-]+',topic):
+        raise S3TestSafetyError('Set TEST_KAFKA_TOPIC=crypto-tests-* to a dedicated topic')
+    import warehouse.etl.db_config as database
+    import processing.streaming.bronze_writer as bronze_writer
+    kafka_cfg={**bronze_writer.pipeline_cfg.get('kafka',{}),'topic_trades':topic,
+               'bootstrap_servers':os.getenv('KAFKA_BOOTSTRAP_SERVERS','127.0.0.1:9092')}
+    with S3TestSandbox.from_environment('streaming-medallion') as scope:
+        with scope.isolated_storage_paths(), patch.object(database,'DB_NAME',test_db), patch.dict(bronze_writer.pipeline_cfg,{'kafka':kafka_cfg}):
+            return _run_e2e_streaming_test(scope)
+
+
+def _run_e2e_streaming_test(scope):
     print("=" * 80)
     print("INTEGRATION TEST: REAL STREAMING MEDALLION PIPELINE (BTC-USDT)")
     print("OKX WebSocket -> Kafka -> Spark -> S3 Bronze -> S3 Silver -> S3 Gold")
     print("=" * 80)
 
-    bucket = get_s3_bucket()
+    bucket = scope.bucket
     print(f"Target AWS S3 Bucket: {bucket}")
 
-    def clean_s3_test_prefix(prefix: str):
-        s3_c = boto3.client("s3")
-        paginator = s3_c.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get("Contents", []):
-                s3_c.delete_object(Bucket=bucket, Key=obj["Key"])
-
-    print("[*] Cleaning previous test S3 prefixes (bronze and silver)...")
-    clean_s3_test_prefix("crypto/bronze/trades/")
-    clean_s3_test_prefix("crypto/silver/trades/")
-
-    test_checkpoint_dir = project_root / "data" / "checkpoints" / "e2e_test_bronze"
-    if test_checkpoint_dir.exists():
-        shutil.rmtree(test_checkpoint_dir)
+    print('[*] Fresh owned S3 prefix: '+scope.prefix+' (no previous data deletion)')
+    test_checkpoint_dir = scope.directory / 'checkpoints'
     test_checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_str = str(test_checkpoint_dir).replace("\\", "/")
 
@@ -148,15 +158,15 @@ def run_e2e_streaming_test():
 
     # Verify messages in Kafka
     consumer = KafkaConsumer(
-        bootstrap_servers="localhost:9092",
+        bootstrap_servers=os.getenv('KAFKA_BOOTSTRAP_SERVERS','127.0.0.1:9092'),
         auto_offset_reset="earliest",
         enable_auto_commit=False,
         consumer_timeout_ms=5000
     )
-    tp = TopicPartition("crypto-trades", 0)
+    tp = TopicPartition(os.environ['TEST_KAFKA_TOPIC'], 0)
     consumer.assign([tp])
     latest_offset = consumer.end_offsets([tp])[tp]
-    print(f"[OK] Verified Kafka topic 'crypto-trades' partition 0 end offset: {latest_offset}")
+    print(f"[OK] Verified isolated Kafka topic partition 0 end offset: {latest_offset}")
     consumer.close()
 
     # =========================================================================
@@ -326,8 +336,8 @@ def run_e2e_streaming_test():
     print("\n" + "=" * 80)
     print("STAGE 5: PHYSICAL S3 OBJECT STORAGE EVIDENCE (BOTO3)")
     print("=" * 80)
-    s3_client = boto3.client("s3")
-    for prefix in ["crypto/bronze/", "crypto/silver/", "crypto/gold/"]:
+    s3_client = scope.client
+    for prefix in [scope.key(layer+'/') for layer in ('bronze','silver','gold')]:
         resp = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
         keys = resp.get("Contents", [])
         print(f"\nPrefix: s3://{bucket}/{prefix} ({len(keys)} objects)")
