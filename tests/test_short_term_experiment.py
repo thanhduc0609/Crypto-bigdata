@@ -127,13 +127,13 @@ class SnapshotTests(unittest.TestCase):
 
     def test_valid_local_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);_,d=self.fixture(root)
+            root=Path(directory).resolve();_,d=self.fixture(root)
             with patch("ml.locked_dataset.ROOT",root),patch("ml.locked_dataset.load_descriptor",return_value=d):
                 result,_=load_locked_candles();self.assertEqual(len(result),10)
 
     def test_corruption_never_falls_back(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);file,d=self.fixture(root);file.write_bytes(b"corrupted")
+            root=Path(directory).resolve();file,d=self.fixture(root);file.write_bytes(b"corrupted")
             with patch("ml.locked_dataset.ROOT",root),patch("ml.locked_dataset.load_descriptor",return_value=d):
                 with self.assertRaisesRegex(ValueError,"checksum"):load_locked_candles(allow_remote=True)
 
@@ -143,7 +143,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_missing_locked_file_does_not_use_mutable_data(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);file,d=self.fixture(root);file.unlink()
+            root=Path(directory).resolve();file,d=self.fixture(root);file.unlink()
             with patch("ml.locked_dataset.ROOT",root),patch("ml.locked_dataset.load_descriptor",return_value=d):
                 with self.assertRaises(FileNotFoundError):load_locked_candles()
 

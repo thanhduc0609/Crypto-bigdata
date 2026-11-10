@@ -97,10 +97,11 @@ def create(root, archive):
     payloads = {}
     secrets = private_values(root)
     for file in sorted(files):
-        name = file.relative_to(root).as_posix()
-        owned_path(root, name)
         if file.is_symlink():
             raise ValueError("Symlink artifacts are not supported")
+        file = file.resolve()
+        name = file.relative_to(root).as_posix()
+        owned_path(root, name)
         content = file.read_bytes()
         if any(value in content for value in secrets):
             raise ValueError("Credential found in artifact: " + name)

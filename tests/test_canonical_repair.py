@@ -19,7 +19,7 @@ class RepairSafetyTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.directory=Path(self.temp.name)
+        self.directory=Path(self.temp.name).resolve()
         self.plan,self.frame,self.rows=fixture(self.directory)
 
     def test_rejects_unconfirmed_instead_of_inferring_from_age(self):

@@ -13,9 +13,9 @@ class ResearchArtifactTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / "clone"
+        self.root = (Path(self.temp.name) / "clone").resolve()
         self.root.mkdir()
-        self.archive = Path(self.temp.name) / "snapshot.zip"
+        self.archive = (Path(self.temp.name) / "snapshot.zip").resolve()
         self.pointer = "data/long_term/current.json"
         self.data = "data/long_term/runs/20261109T000000Z/forecast.json"
 
