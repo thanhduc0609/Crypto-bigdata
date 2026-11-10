@@ -103,5 +103,16 @@ class ResearchArtifactTests(unittest.TestCase):
         self.assertNotIn('fixture-private-secret',str(caught.exception))
         self.assertFalse(self.archive.exists())
 
+    def test_published_archive_cannot_be_replaced_by_new_results(self):
+        file=self.root/self.data;file.parent.mkdir(parents=True);file.write_bytes(b'published result')
+        with patch('runtime.research_artifacts.collect',return_value=({file},{})):
+            first=create(self.root,self.archive)
+            original=self.archive.read_bytes()
+            self.assertEqual(first['snapshot'],self.archive.stem)
+            file.write_bytes(b'different research version')
+            with self.assertRaisesRegex(ValueError,'new archive name'):
+                create(self.root,self.archive)
+        self.assertEqual(self.archive.read_bytes(),original)
+
 
 if __name__=='__main__':unittest.main()

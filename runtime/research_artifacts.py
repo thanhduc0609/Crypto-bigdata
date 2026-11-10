@@ -117,14 +117,18 @@ def create(root, archive):
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o100644 << 16
                 bundle.writestr(info, content)
-        manifest = {"schema_version": 1, "snapshot": "academic-20261109", "archive": archive.name,
+        manifest = {"schema_version": 1, "snapshot": archive.stem, "archive": archive.name,
                     "archive_sha256": sha(temporary.read_bytes()),
                     "files": {name: {"sha256": sha(content), "bytes": len(content)} for name, content in sorted(payloads.items())},
                     "required_source_sha256": required,
                     "note": "Frozen results; no retraining. Retrospective limitations remain unchanged."}
         validate_sources(root, required)
-        os.replace(temporary, archive)
         sidecar = archive.with_suffix(".manifest.json")
+        if archive.exists() and sha(archive.read_bytes()) != manifest["archive_sha256"]:
+            raise ValueError("Published archive differs; use a new archive name for a new version")
+        if sidecar.exists() and read_json(sidecar) != manifest:
+            raise ValueError("Published manifest differs; use a new archive name for a new version")
+        os.replace(temporary, archive)
         sidecar.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return manifest
     finally:
