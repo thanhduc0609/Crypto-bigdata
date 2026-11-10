@@ -9,6 +9,8 @@ htmlcov/
 # Environment variables
 .env
 ml/prediction_worker.lock
+data/locks/*
+!data/locks/.gitkeep
 # Activated research descriptor is restored from the versioned artifact bundle.
 configs/canonical_snapshot.json
 
