@@ -15,9 +15,12 @@ MODULES=[
 
 
 def main():
-    commands=[[sys.executable,'-m','unittest',*MODULES,'-q'],['node','--test','tests/long_term_viewport.test.cjs']]
+    # A pristine checkout has no ignored data; prepare the trusted fixtures first.
+    commands=[[sys.executable,'scripts/research_artifacts.py','restore'],
+              [sys.executable,'scripts/research_artifacts.py','verify'],
+              [sys.executable,'-m','unittest',*MODULES,'-q'],
+              ['node','--test','tests/long_term_viewport.test.cjs']]
     commands += [['node','--check',str(p.relative_to(ROOT))] for p in sorted((ROOT/'web/static/js').glob('*.js'))]
-    commands += [[sys.executable,'scripts/research_artifacts.py','restore'],[sys.executable,'scripts/research_artifacts.py','verify']]
     review=json.loads((ROOT/'configs/ml_review.json').read_text())
     commands.append([sys.executable,'scripts/verify_short_term_experiment.py','data/ml_experiments/'+review['run_id']])
     for command in commands:
