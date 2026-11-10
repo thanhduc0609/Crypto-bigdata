@@ -59,7 +59,12 @@ def load_candles_from_postgres(limit: Optional[int] = None) -> pd.DataFrame:
 
 def load_candles_from_lake() -> pd.DataFrame:
     """Attempts to load 1m BTC candles from Gold Lakehouse (Parquet)."""
-    # Check local canonical gold lake first
+    # An activated version takes priority over an unrelated local archive.
+    from storage.canonical_snapshot import load_descriptor
+    if load_descriptor() is not None:
+        from ml.locked_dataset import load_locked_candles
+        return load_locked_candles(allow_remote=True)[0]
+    # Legacy behavior only when no canonical version has been activated.
     local_gold = project_root / "data" / "lake" / "gold" / "candles_1m" / "symbol=BTC-USDT"
     if local_gold.exists():
         parquets = list(local_gold.glob("*.parquet"))
@@ -91,6 +96,14 @@ def fetch_historical_btc_candles(min_candles: int = 5000) -> pd.DataFrame:
       3. OKX Historical Backfill Module (downloads full verifiable history)
     Never synthesizes fake buy/sell volume or fake VWAP.
     """
+    from storage.canonical_snapshot import load_descriptor
+    if load_descriptor() is not None:
+        # Fail closed; a bad locked file must not quietly become a different
+        # training cohort fetched from mutable DW or an automatic backfill.
+        df=load_candles_from_lake()
+        if len(df)<min_candles:
+            raise ValueError("Activated snapshot has insufficient training candles")
+        return df
     # 1. Try Gold Lakehouse
     try:
         df = load_candles_from_lake()

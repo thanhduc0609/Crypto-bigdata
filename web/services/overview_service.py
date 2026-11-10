@@ -178,7 +178,7 @@ def get_candles_data(
     Chỉ trả về các trường thật, không tự suy đoán hoặc chia đôi volume.
     """
     if source_pref != "dw":
-        bar_map = {"1m": "1m", "1h": "1H", "1d": "1D"}
+        bar_map = {"1m": "1m", "1h": "1H", "1d": "1Dutc"}
         bar = bar_map.get(timeframe, "1m")
         url = f"{okx_rest_url}/api/v5/market/candles?instId={symbol}&bar={bar}&limit={limit}"
         data = fetch_okx_json(url)
@@ -192,9 +192,11 @@ def get_candles_data(
                 l = float(c[3])
                 cl = float(c[4])
                 vol = float(c[5])
-                turnover = float(c[7]) if len(c) > 7 and c[7] else (vol * cl)
-                is_closed = (c[8] == "1") if len(c) > 8 else True
-                vwap = round(turnover / vol, 2) if vol > 0 else None
+                turnover = float(c[7]) if len(c) > 7 and c[7] else None
+                if len(c) < 9 or c[8] not in ("0", "1"):
+                    raise ValueError("Missing OKX candle confirmation")
+                is_closed = c[8] == "1"
+                vwap = round(turnover / vol, 2) if vol > 0 and turnover is not None else None
 
                 candles.append({
                     "time": ts_sec,
@@ -243,9 +245,18 @@ def get_candles_data(
                     SELECT 
                         EXTRACT(EPOCH FROM hour_bucket)::bigint AS time,
                         open_price, high_price, low_price, close_price, total_volume,
-                        hourly_vwap, buy_volume, sell_volume, avg_trade_imbalance, total_turnover_usd,
-                        TRUE AS is_closed
-                    FROM warehouse.vw_hourly_market_summary
+                        hourly_vwap, stats.buy_volume, stats.sell_volume, avg_trade_imbalance, total_turnover_usd,
+                        (hour_bucket + INTERVAL '1 hour' <= NOW() AND stats.n = 60 AND stats.closed) AS is_closed,
+                        stats.n, 60, stats.latest
+                    FROM warehouse.vw_hourly_market_summary v
+                    CROSS JOIN LATERAL (
+                        SELECT COUNT(*) AS n, BOOL_AND(f.is_closed) AS closed,
+                               SUM(f.buy_volume) AS buy_volume, SUM(f.sell_volume) AS sell_volume,
+                               EXTRACT(EPOCH FROM MAX(f.window_start))::bigint AS latest
+                        FROM warehouse.fact_crypto_1m_candles f
+                        WHERE f.symbol = v.symbol AND f.window_start >= v.hour_bucket
+                          AND f.window_start < v.hour_bucket + INTERVAL '1 hour'
+                    ) stats
                     WHERE symbol = %s
                     ORDER BY hour_bucket DESC
                     LIMIT %s;
@@ -255,9 +266,19 @@ def get_candles_data(
                     SELECT 
                         EXTRACT(EPOCH FROM (trade_date::timestamp AT TIME ZONE 'UTC'))::bigint AS time,
                         open_price, high_price, low_price, close_price, total_volume,
-                        daily_vwap, buy_volume, sell_volume, NULL AS avg_trade_imbalance, total_turnover_usd,
-                        TRUE AS is_closed
-                    FROM warehouse.vw_daily_market_summary
+                        daily_vwap, stats.buy_volume, stats.sell_volume, NULL AS avg_trade_imbalance, total_turnover_usd,
+                        (trade_date < (NOW() AT TIME ZONE 'UTC')::date AND stats.n = 1440 AND stats.closed) AS is_closed,
+                        stats.n, 1440, stats.latest
+                    FROM warehouse.vw_daily_market_summary v
+                    CROSS JOIN LATERAL (
+                        SELECT COUNT(*) AS n, BOOL_AND(f.is_closed) AS closed,
+                               SUM(f.buy_volume) AS buy_volume, SUM(f.sell_volume) AS sell_volume,
+                               EXTRACT(EPOCH FROM MAX(f.window_start))::bigint AS latest
+                        FROM warehouse.fact_crypto_1m_candles f
+                        WHERE f.symbol = v.symbol
+                          AND f.window_start >= (v.trade_date::timestamp AT TIME ZONE 'UTC')
+                          AND f.window_start < ((v.trade_date + 1)::timestamp AT TIME ZONE 'UTC')
+                    ) stats
                     WHERE symbol = %s
                     ORDER BY trade_date DESC
                     LIMIT %s;
@@ -268,7 +289,7 @@ def get_candles_data(
                         EXTRACT(EPOCH FROM window_start)::bigint AS time,
                         open, high, low, close, volume,
                         vwap, buy_volume, sell_volume, trade_imbalance, total_trade_value,
-                        is_closed
+                        is_closed, 1, 1, EXTRACT(EPOCH FROM window_start)::bigint
                     FROM warehouse.fact_crypto_1m_candles
                     WHERE symbol = %s
                     ORDER BY window_start DESC
@@ -293,7 +314,10 @@ def get_candles_data(
                         "sell_volume": float(r[8]) if r[8] is not None else None,
                         "trade_imbalance": float(r[9]) if r[9] is not None else None,
                         "total_trade_value": float(r[10]) if r[10] is not None else None,
-                        "is_closed": bool(r[11])
+                        "is_closed": bool(r[11]),
+                        "observed_minutes": int(r[12]),
+                        "expected_minutes": int(r[13]),
+                        "coverage_complete": r[12] == r[13]
                     })
 
             data_ts = datetime.fromtimestamp(candles[-1]["time"], tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if candles else None
@@ -303,6 +327,7 @@ def get_candles_data(
                 "timeframe": timeframe,
                 "source": "postgres_dw",
                 "candles": candles,
+                "latest_observation_time": max((int(r[14]) for r in rows if r[14] is not None), default=None),
                 "data_timestamp": data_ts
             }, 200
     except Exception as e:

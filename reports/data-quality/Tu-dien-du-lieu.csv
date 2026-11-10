@@ -1,0 +1,20 @@
+﻿field,meaning,unit,rule
+trade_id,Mã giao dịch,String,Khóa khử trùng giao dịch; với pipeline hiện tại chỉ BTC-USDT
+symbol,Cặp giao dịch,BTC-USDT,"BTC là tài sản cơ sở, USDT là tài sản báo giá"
+price,Giá khớp,USDT/BTC,Phải hữu hạn và > 0
+size / volume / volume_btc,Khối lượng,BTC,Giao dịch size > 0; nến cho phép volume = 0
+side,Phía chủ động của giao dịch,buy/sell,Không phải danh tính người mua/bán hay sổ lệnh
+timestamp / raw_timestamp,Thời gian sự kiện gốc,Unix millisecond UTC,Chia 1000 để có giây
+trade_time,Thời gian khớp,Timestamp UTC,"Từ raw_timestamp, không thay bằng giờ nhận Kafka"
+kafka_timestamp,Giờ Kafka ghi nhận,Timestamp UTC,"Dùng theo dõi thu nhận, có thể khác event time"
+kafka_topic / partition / offset,Vị trí bản ghi Kafka,Topic + số nguyên,Offset chỉ có nghĩa trong cùng topic/partition
+window_start / window_end,Cửa sổ nến phút,"UTC; [start, end)","Đúng mốc phút, độ dài 60 giây"
+open/high/low/close,Giá mở/cao/thấp/đóng nến,USDT/BTC,"Low <= Open,Close <= High; mọi giá > 0"
+trade_value / total_trade_value / turnover_usdt,Doanh số,USDT,"Giao dịch = price × size; doanh số REST lấy từ nguồn, không tự suy đoán khi thiếu"
+vwap,Giá bình quân theo khối lượng,USDT/BTC,Doanh số / khối lượng khi đủ thông tin
+trade_count,Số giao dịch đóng góp,Số giao dịch,REST có thể không cung cấp; NULL không phải 0
+buy_volume / sell_volume,Khối lượng theo phía chủ động,BTC,REST có thể NULL; không chia đôi volume để điền
+trade_imbalance,Cán cân khối lượng,"[-1,1]",(buy_volume - sell_volume)/(buy_volume + sell_volume) khi có đủ dữ liệu
+source,Nguồn dữ liệu,historical_rest/realtime_stream…,Phân biệt quyền ưu tiên REST với streaming
+is_closed / confirm,Xác nhận nến hoàn tất,True/False/NULL hoặc 1/0,NULL là chưa biết; không mặc định thành True trong audit
+_source_object / _source_sha256,Truy vết audit,S3 key / SHA-256,Từ dòng sau làm sạch quay lại file nguồn cố định; không phải lineage có sẵn cho mọi bản ghi lịch sử

@@ -4,7 +4,7 @@ Web UI & Backend API Unified Terminal Refactoring Test Suite
 =============================================================================
 Scope: BTC Unified Trading Terminal (Spot BTC-USDT & Perpetual BTC-USDT-SWAP)
 Verifies:
-  1. HTML contains unified single-screen terminal layout (no multi-tab navigation).
+  1. Market page has separate URL/navigation alongside the monthly forecast page.
   2. Hero panel includes both ML Direction Prediction and Futures Trading Plan.
   3. Analytics row includes 60s Order Flow, Volume SVG chart, and Donut SVG chart.
   4. /api/futures/plan returns valid structure, real instrument, strict math bounds.
@@ -43,18 +43,21 @@ def test_web_ui_refactor():
     print("=" * 80)
 
     # 1. Test HTML Structure & Unified Terminal Screen
-    res = client.get("/")
+    res = client.get("/thi-truong")
     assert_test("HTML Status 200", res.status_code == 200)
     html_text = res.data.decode("utf-8")
 
-    assert_test("Unified Terminal layout present (single screen, no legacy tabs)", 
+    assert_test("Market layout and two-page academic navigation present",
                 (('theme-terminal' in html_text) or ('theme-light' in html_text)) and 
-                ('nav-tabs' not in html_text) and 
+                ('href="/du-bao-3-nam"' in html_text) and
+                ('href="/thi-truong" aria-current="page"' in html_text) and
                 ('class="main-workspace-grid"' in html_text))
 
-    assert_test("Header displays BTC Spot and Perpetual instrument tags",
+    assert_test("Academic title and explicitly collapsed Futures extension",
                 ("BTC-USDT" in html_text) and 
                 ("BTC-USDT-SWAP" in html_text) and
+                ('<title>Phân tích thị trường · BTC-USDT</title>' in html_text) and
+                ('<details class="hero-subcard futures-subcard">' in html_text) and
                 ("header-basis" in html_text))
 
     assert_test("Hero Panel contains Prediction & Futures Plan cards",

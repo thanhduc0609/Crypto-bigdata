@@ -3,9 +3,8 @@
 Crypto Big Data - Web Analytics & ML Prediction Dashboard (Flask Backend)
 =============================================================================
 Cung cấp API phục vụ Web Dashboard theo kiến trúc tối giản, rõ ràng và dữ liệu thật:
-  - Tab 1: Tổng quan (Overview) - Nến 1m OHLCV, VWAP, Vi cấu trúc Mua/Bán (BTC-USDT)
-  - Tab 2: Giao dịch lớn (Large Trades) - Lọc theo ngưỡng và khoảng thời gian thực
-  - Tab 3: Dự báo (Prediction) - Kết quả dự báo hướng giá +5m (XGBoost) và lịch sử đối chiếu
+  - / hoặc /du-bao-3-nam: lịch sử tháng, dự báo 36 tháng và bằng chứng đánh giá
+  - /thi-truong: nến, VWAP, dòng mua/bán, giao dịch lớn và dự báo +5 phút
 =============================================================================
 """
 
@@ -35,6 +34,7 @@ from processing.core.env import load_env_vars
 from web.orderflow_realtime import get_orderflow_tracker
 from ml.prediction_worker import get_prediction_worker
 from web.services.overview_service import get_overview_data, get_candles_data
+from web.services.candles_resilience import CandleService
 from web.services.trades_service import get_large_trades, generate_large_trades_csv
 from web.services.prediction_service import (
     get_latest_prediction,
@@ -42,6 +42,7 @@ from web.services.prediction_service import (
     get_model_metadata
 )
 from web.services.futures_plan_service import generate_futures_plan
+from web.services.long_term_service import load_forecast, forecast_csv, evaluation_csv
 
 load_env_vars()
 
@@ -53,6 +54,7 @@ app = Flask(
 
 OKX_REST_URL = os.getenv("OKX_REST_URL", "https://www.okx.com")
 TARGET_SYMBOL = "BTC-USDT"
+candle_service = CandleService()
 
 # Database config
 DB_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
@@ -72,6 +74,7 @@ def get_db_connection():
             dbname=DB_NAME,
             user=DB_USER,
             password=DB_PASSWORD,
+            options='-c timezone=UTC',
             connect_timeout=3
         )
         return conn
@@ -99,6 +102,18 @@ def fetch_okx_json(url: str):
     return None
 
 
+def get_candles_db_connection():
+    """Short, read-only connection budget for display fallback only."""
+    import psycopg2
+    try:
+        return psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER,
+            password=DB_PASSWORD, connect_timeout=1,
+            options="-c timezone=UTC -c statement_timeout=1500 -c lock_timeout=500 -c default_transaction_read_only=on")
+    except psycopg2.Error:
+        return None
+
+
 def init_background_services():
     """
     Khởi động an toàn các dịch vụ nền khi tiến trình server web chính chạy.
@@ -122,8 +137,14 @@ def init_background_services():
 # =============================================================================
 
 @app.route("/")
+@app.route("/du-bao-3-nam")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", page="forecast", page_title="Dự báo 3 năm · Nghiên cứu BTC-USDT")
+
+
+@app.route("/thi-truong")
+def market_page():
+    return render_template("index.html", page="market", page_title="Phân tích thị trường · BTC-USDT")
 
 
 @app.route("/api/health")
@@ -135,27 +156,57 @@ def api_health():
     if conn:
         try:
             with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '2000ms'")
                 for tbl in ["fact_crypto_trades", "fact_crypto_1m_candles", "fact_btc_predictions"]:
                     cur.execute(f"SELECT count(*) FROM warehouse.{tbl};")
                     table_counts[tbl] = cur.fetchone()[0]
         except Exception as e:
+            db_ok=False
             print(f"[!] Warning checking table counts: {e}")
         finally:
             conn.close()
 
+    from storage.canonical_snapshot import load_descriptor
+    try:
+        canonical=load_descriptor()
+        canonical_status=({key:canonical[key] for key in ("run_id","state","rows","requested_start","requested_end","manifest_sha256")}
+                          if canonical else None)
+    except (ValueError,KeyError):
+        canonical_status={"state":"invalid_descriptor"}
     return jsonify({
-        "status": "online",
+        "status": "online" if db_ok else "degraded",
         "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "database_connected": db_ok,
         "database_target": f"{DB_HOST}:{DB_PORT}/{DB_NAME}",
         "table_counts": table_counts,
+        "canonical_snapshot": canonical_status,
         "symbol": TARGET_SYMBOL
-    })
+    }),200 if db_ok else 503
 
 
 # =============================================================================
 # TAB 1: TỔNG QUAN (OVERVIEW & CANDLES)
 # =============================================================================
+
+@app.route("/api/system/status")
+def api_system_status():
+    from runtime.telemetry import public_status
+    return jsonify(public_status())
+
+
+@app.route("/api/ml/review")
+def api_ml_review():
+    from web.services.research_status import ml_review
+    data,code=ml_review()
+    return jsonify(data),code
+
+
+@app.route("/api/forecast/long-term/research")
+def api_long_term_research():
+    from web.services.research_status import long_term_review
+    data,code=long_term_review()
+    return jsonify(data),code
+
 
 @app.route("/api/overview")
 def api_overview():
@@ -180,22 +231,29 @@ def api_candles():
     """
     Trả về danh sách nến OHLCV, VWAP và vi cấu trúc nến.
     Chỉ trả về các trường thật, không tự suy đoán hoặc chia đôi volume.
-    Nguồn cố định: OKX REST (live). Hỗ trợ source=dw khi kiểm thử.
+    OKX có retry/cache và dự phòng DW; phản hồi ghi rõ nguồn và độ mới.
     """
     source_pref = request.args.get("source", "live").lower()
     timeframe = request.args.get("timeframe", "1m").lower()
-    limit = min(int(request.args.get("limit", 150)), 300)
+    try:
+        limit = int(request.args.get("limit", 150))
+    except ValueError:
+        return jsonify({"status": "error", "message": "limit phải là số nguyên từ 1 đến 300"}), 400
 
-    data, code = get_candles_data(
+    data, code = candle_service.get(
         source_pref=source_pref,
         symbol=TARGET_SYMBOL,
         timeframe=timeframe,
         limit=limit,
         okx_rest_url=OKX_REST_URL,
-        get_db_conn=get_db_connection,
-        fetch_okx_json=fetch_okx_json
+        get_db_conn=get_candles_db_connection,
+        loader=get_candles_data
     )
-    return jsonify(data), code
+    response = jsonify(data)
+    response.headers["Cache-Control"] = "no-store"
+    if code == 503:
+        response.headers["Retry-After"] = "5"
+    return response, code
 
 
 # =============================================================================
@@ -409,6 +467,33 @@ def api_ml_metadata():
     """
     data, code = get_model_metadata(project_root)
     return jsonify(data), code
+
+
+@app.route('/api/forecast/long-term')
+def api_long_term_forecast():
+    directory = app.config.get('LONG_TERM_DATA_DIR', project_root / 'data' / 'long_term')
+    data, code = load_forecast(directory)
+    return jsonify(data), code
+
+
+@app.route('/api/forecast/long-term/export')
+def api_long_term_export():
+    directory = app.config.get('LONG_TERM_DATA_DIR', project_root / 'data' / 'long_term')
+    data, code = load_forecast(directory)
+    if code != 200:
+        return jsonify(data), code
+    return Response(forecast_csv(data), mimetype='text/csv', headers={
+        'Content-Disposition': 'attachment; filename="btc_monthly_forecast_36m.csv"'})
+
+
+@app.route('/api/forecast/long-term/evaluation/export')
+def api_long_term_evaluation_export():
+    directory = app.config.get('LONG_TERM_DATA_DIR', project_root / 'data' / 'long_term')
+    data, code = load_forecast(directory)
+    if code != 200:
+        return jsonify(data), code
+    return Response(evaluation_csv(data), mimetype='text/csv', headers={
+        'Content-Disposition':'attachment; filename="btc_36m_model_comparison.csv"'})
 
 
 if __name__ == "__main__":

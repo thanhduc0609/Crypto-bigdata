@@ -69,7 +69,7 @@ def start_bronze_writer(
         .option("kafka.bootstrap.servers", kafka_server)
         .option("subscribe", topic)
         .option("startingOffsets", starting_offsets)
-        .option("failOnDataLoss", "false")
+        .option("failOnDataLoss", os.getenv("KAFKA_FAIL_ON_DATA_LOSS", "true"))
         .load()
     )
 

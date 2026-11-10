@@ -514,12 +514,22 @@ def save_prediction_to_db(pred: Dict[str, Any]):
             conn.close()
 
 
+def _validated_outcome_price(value) -> Optional[float]:
+    """A resolved actual price must be finite and strictly positive."""
+    try:
+        price = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return price if np.isfinite(price) and price > 0 else None
+
+
 def evaluate_unresolved_predictions(candles_df: Optional[pd.DataFrame] = None) -> int:
     """
     Evaluates unresolved predictions once the target candle has closed:
       - Target candle opens at target_timestamp and closes at target_timestamp + 60 seconds.
       - Finds confirmed closed candle at target_timestamp (strictly window_start == target_timestamp).
       - Rejects legacy unaligned seconds, tolerance deviations, or unclosed candles.
+      - Actual prices require explicit confirmed REST provenance and finite positive prices.
       - Prioritizes recent pending predictions so unresolvable legacy records do not block evaluation.
       - Rate-limits OKX REST backfill requests to max 3 per cycle.
       - Updates actual_future_price, actual_direction, is_correct in fact_btc_predictions idempotently.
@@ -587,9 +597,10 @@ def evaluate_unresolved_predictions(candles_df: Optional[pd.DataFrame] = None) -
                 if not exact_matches.empty:
                     matched_candle = exact_matches.iloc[0]
                     # Mandatory explicit closure check (do NOT default to True)
-                    if "is_closed" in matched_candle and bool(matched_candle["is_closed"]) is True:
-                        if "source" not in matched_candle or matched_candle["source"] in ("historical_rest", "okx_rest"):
-                            future_px = float(matched_candle["close"])
+                    closure = matched_candle.get("is_closed", False)
+                    if isinstance(closure, (bool, np.bool_)) and bool(closure):
+                        if matched_candle.get("source") in ("historical_rest", "okx_rest"):
+                            future_px = _validated_outcome_price(matched_candle["close"])
 
             # 2. Exact match from PostgreSQL DW for the closed target candle
             if future_px is None:
@@ -599,11 +610,12 @@ def evaluate_unresolved_predictions(candles_df: Optional[pd.DataFrame] = None) -
                     WHERE symbol = 'BTC-USDT'
                       AND window_start = %s
                       AND is_closed = TRUE
+                      AND source = 'historical_rest'
                     LIMIT 1;
                 """, (tgt_ts_utc,))
                 candle_row = cur.fetchone()
                 if candle_row:
-                    future_px = float(candle_row[0])
+                    future_px = _validated_outcome_price(candle_row[0])
 
             # 3. If still not in DW, fetch authoritative confirmed candle from OKX REST (rate limited)
             if future_px is None and rest_requests_count < MAX_REST_REQUESTS:

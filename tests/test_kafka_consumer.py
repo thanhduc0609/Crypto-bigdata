@@ -1,62 +1,43 @@
-"""
-=============================================================================
-Crypto Big Data - Test Kafka Consumer
-=============================================================================
-"""
-
-import os
-import sys
+"""Opt-in read-only Kafka smoke test with a deadline; safe to import offline."""
+import argparse
 import json
-from datetime import datetime
+import os
 from pathlib import Path
-from kafka import KafkaConsumer
+import sys
+import time
 
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from processing.core.spark_session import load_env_vars
 
-load_env_vars()
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--seconds', type=int, default=30)
+    parser.add_argument('--max-messages', type=int, default=10)
+    args = parser.parse_args()
+    if not 1 <= args.seconds <= 300 or args.max_messages < 1:
+        parser.error('Use 1–300 seconds and a positive message count')
+    from kafka import KafkaConsumer
+    from processing.core.env import load_env_vars
+    load_env_vars()
+    consumer = KafkaConsumer(os.getenv('KAFKA_TOPIC_TRADES', 'crypto-trades'),
+        bootstrap_servers=os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092'),
+        group_id=None, enable_auto_commit=False, auto_offset_reset='latest', consumer_timeout_ms=1000,
+        value_deserializer=lambda value: json.loads(value.decode('utf-8')))
+    count = 0
+    deadline = time.monotonic() + args.seconds
+    try:
+        while time.monotonic() < deadline and count < args.max_messages:
+            for message in consumer:
+                count += 1
+                print(json.dumps(dict(partition=message.partition, offset=message.offset, trade=message.value)))
+                if count >= args.max_messages or time.monotonic() >= deadline:
+                    break
+    finally:
+        consumer.close()
+    print('Messages observed:', count)
+    return 0 if count else 1
 
-KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-TOPIC = os.getenv("KAFKA_TOPIC_TRADES", os.getenv("KAFKA_TOPIC", "crypto-trades"))
-CONSUMER_GROUP = "crypto-test-consumer"
 
-consumer = KafkaConsumer(
-    TOPIC,
-    bootstrap_servers=KAFKA_SERVER,
-    group_id=CONSUMER_GROUP,
-    auto_offset_reset="latest",
-    enable_auto_commit=True,
-    key_deserializer=lambda key: key.decode("utf-8") if key else None,
-    value_deserializer=lambda value: json.loads(value.decode("utf-8"))
-)
-
-print("=" * 85)
-print("KAFKA TEST CONSUMER")
-print(f"Kafka Server  : {KAFKA_SERVER}")
-print(f"Topic         : {TOPIC}")
-print(f"Consumer Group: {CONSUMER_GROUP}")
-print("=" * 85)
-print("\nWaiting for crypto trades (Press Ctrl+C to stop)...\n")
-
-try:
-    for message in consumer:
-        trade = message.value
-        trade_time = datetime.fromtimestamp(trade["timestamp"] / 1000).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        print(
-            f"[CONSUMER] "
-            f"P{message.partition} | "
-            f"Offset: {message.offset:<8} | "
-            f"{trade['symbol']:<9} | "
-            f"{trade['side']:<4} | "
-            f"Price: {trade['price']:<12} | "
-            f"Size: {trade['size']:<10} | "
-            f"{trade_time}"
-        )
-except KeyboardInterrupt:
-    print("\nStopping consumer...")
-finally:
-    consumer.close()
-    print("Kafka Consumer closed.")
+if __name__ == '__main__':
+    sys.exit(main())

@@ -62,6 +62,12 @@ def get_silver_trades_path(symbol: str = "BTC-USDT") -> str:
 
 def get_gold_candles_path(symbol: str = "BTC-USDT") -> str:
     """Returns the storage path for Gold (1m OHLCV Candlesticks) data."""
+    from storage.canonical_snapshot import resolve_gold
+    snapshot=resolve_gold(get_storage_mode(),get_s3_bucket())
+    if snapshot is not None:
+        if symbol!="BTC-USDT":
+            raise ValueError("Activated canonical snapshot only supports BTC-USDT")
+        return snapshot
     if get_storage_mode() == "s3":
         bucket = get_s3_bucket()
         rel = storage_cfg.get("s3", {}).get("gold_candles_path", "crypto/gold/candles_1m")

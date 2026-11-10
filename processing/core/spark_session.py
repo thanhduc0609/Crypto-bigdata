@@ -134,6 +134,10 @@ def create_spark_session(
                 .config("spark.hadoop.fs.s3a.access.key", aws_access_key)
                 .config("spark.hadoop.fs.s3a.secret.key", aws_secret_key)
             )
+        if os.getenv("AWS_SESSION_TOKEN"):
+            builder=(builder.config("spark.hadoop.fs.s3a.session.token",os.environ["AWS_SESSION_TOKEN"])
+                     .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                             "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider"))
         if s3_endpoint:
             builder = (
                 builder

@@ -8,6 +8,9 @@ htmlcov/
 
 # Environment variables
 .env
+ml/prediction_worker.lock
+# Activated research descriptor is restored from the versioned artifact bundle.
+configs/canonical_snapshot.json
 
 # Spark & Temp
 checkpoints/
@@ -25,6 +28,16 @@ data/test_isolated_backfill/
 data/backfill_progress_*.json
 data/backfill_summary_*.json
 data/lake/
+data/long_term/
+data/test_runs/
+data/quality_audits/
+data/canonical_repairs/
+data/ml_experiments/
+data/runtime/
+data/medallion_runs/
+data/long_term_research/
+data/demo_audits/
+data/ivy/
 ml/artifacts/staging/
 
 # IDE

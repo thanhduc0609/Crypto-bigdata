@@ -64,7 +64,9 @@ class PublishState:
 def process_silver_to_gold(
     spark: SparkSession,
     symbol: str = "BTC-USDT",
-    sync_to_postgres: bool = True
+    sync_to_postgres: bool = True,
+    silver_path: Optional[str] = None,
+    gold_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Transforms Silver trades into 1-minute Gold OHLCV + microstructure candles.
@@ -83,8 +85,10 @@ def process_silver_to_gold(
     if symbol != "BTC-USDT":
         raise ValueError(f"Medallion Pipeline strictly processes 'BTC-USDT', but received: {symbol}")
 
-    silver_path = get_silver_trades_path(symbol)
-    gold_path = get_gold_candles_path(symbol)
+    silver_path = silver_path or get_silver_trades_path(symbol)
+    gold_path = gold_path or get_gold_candles_path(symbol)
+    from storage.canonical_snapshot import assert_mutable_gold_path
+    assert_mutable_gold_path(gold_path)
 
     print("=" * 80)
     print("MEDALLION BATCH LAYER: SILVER -> GOLD 1M OHLCV AGGREGATION")
