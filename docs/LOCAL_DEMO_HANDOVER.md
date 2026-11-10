@@ -1,5 +1,9 @@
 # Vận hành local, demo và phạm vi kiểm chứng
 
+Docker đã thống nhất vào `docker-compose.yml`, project `crypto-bigdata`.
+Máy đã chạy bộ cũ cần làm theo [chuyển dữ liệu Docker](DOCKER_SETUP.md) một lần.
+Giữ các giá trị `*_VOLUME_NAME`/`*_IMAGE` mà công cụ chuyển ghi vào `.env` riêng.
+
 Cập nhật giao diện 10/11/2026: `/` hoặc `/du-bao-3-nam` mở dự báo dài hạn;
 `/thi-truong` mở thị trường trực tiếp. Hai trang có điều hướng chung.
 Xem [thu phóng, bố cục và chụp ảnh minh chứng](RESEARCH_UI.md).
@@ -41,7 +45,7 @@ bài thử xóa/recreate broker hoặc mô phỏng hỏng ổ đĩa.
   Java không chọn đúng; không cần hạ chính sách bảo mật hệ điều hành.
 - Tạo venv mới khi chưa có và cài `requirements.local.lock.txt` (phiên bản thực
   cài trên máy kiểm thử). `pip check` trên máy này không phát hiện dependency hỏng.
-- Khi chưa có `.env`, sao chép `configs/local.env.example`, điền thông tin thật ở
+- Khi chưa có `.env`, sao chép `.env.example`, điền thông tin thật ở
   máy cá nhân. Không ghi đè `.env` đang dùng và không đưa khóa vào Git/báo cáo.
 - S3_RUN_PREFIX phải có dạng `crypto/local-runs/<ten-phien>`; batch từ chối prefix
   dùng chung. Quyền AWS phải phù hợp với bucket/prefix được nhóm cho phép.

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Crypto Big Data - Real-time Streaming & Medallion Pipeline Orchestration (PowerShell)
 # =============================================================================
 # KIẾN TRÚC HỆ THỐNG: SPEED LAYER + MEDALLION BATCH DATA LAKE
@@ -257,11 +257,11 @@ function Get-ComponentVersions {
     # Docker Containers Status
     $dockerCheck = Get-Command docker -ErrorAction SilentlyContinue
     if ($dockerCheck) {
-        $kContainer = docker ps --filter "name=crypto-kafka" --format "{{.Status}}" 2>&1
+        $kContainer = docker compose --project-name crypto-bigdata --env-file "$PROJECT_ROOT/.env" -f "$PROJECT_ROOT/docker-compose.yml" ps --status running --format "{{.Status}}" kafka 2>&1
         if ($kContainer -and $kContainer -notmatch "error") {
             $kafkaStatus = "Running ($kContainer)"
         }
-        $pContainer = docker ps --filter "name=crypto-postgres" --format "{{.Status}}" 2>&1
+        $pContainer = docker compose --project-name crypto-bigdata --env-file "$PROJECT_ROOT/.env" -f "$PROJECT_ROOT/docker-compose.yml" ps --status running --format "{{.Status}}" postgres 2>&1
         if ($pContainer -and $pContainer -notmatch "error") {
             $pgStatus = "Running ($pContainer)"
         }
@@ -314,7 +314,7 @@ if ($StreamPipeline) {
 
     # 1. Bật Docker Containers
     Write-Host "`n[1/3] Khoi dong Docker Containers (Kafka:9092 va PostgreSQL:5433)..." -ForegroundColor Yellow
-    docker compose up -d
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/docker_environment.py" up
     if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         Write-Host "`n[ERROR] Failed to start Docker containers." -ForegroundColor Red
         exit $LASTEXITCODE
@@ -361,11 +361,11 @@ elseif ($MedallionPipeline) {
 }
 elseif ($DockerUp) {
     Write-Host "`n[+] Starting Kafka and PostgreSQL Containers..." -ForegroundColor Yellow
-    docker compose up -d
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/docker_environment.py" up
 }
 elseif ($DockerDown) {
     Write-Host "`n[-] Stopping Docker Containers..." -ForegroundColor Yellow
-    docker compose down
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/docker_environment.py" stop
 }
 elseif ($InitWarehouse) {
     Invoke-PythonStep "Initializing PostgreSQL DW Schema and Views" "$PROJECT_ROOT\warehouse\etl\db_config.py"
