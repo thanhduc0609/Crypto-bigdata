@@ -1,17 +1,19 @@
-param([switch]$Streaming,[switch]$Batch)
+param([switch]$Streaming,[switch]$Batch,[switch]$Admin)
 $ErrorActionPreference='Stop'
 $demoRepo=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $demoPython=Join-Path $demoRepo '.venv\Scripts\python.exe'
 $demoState=Join-Path $demoRepo 'data\runtime'
 $demoLogs=Join-Path $demoState 'logs'
 if (-not (Test-Path -LiteralPath $demoPython)) { throw 'Create .venv and install requirements.local.lock.txt first.' }
-if (-not (Test-Path -LiteralPath (Join-Path $demoRepo '.env'))) { throw 'Copy configs/local.env.example to .env and fill the settings.' }
+if (-not (Test-Path -LiteralPath (Join-Path $demoRepo '.env'))) { throw 'Copy .env.example to .env and fill the settings.' }
 New-Item -ItemType Directory -Path $demoLogs -Force | Out-Null
-docker compose --env-file (Join-Path $demoRepo '.env') -f (Join-Path $demoRepo 'compose.local.yaml') up -d --no-recreate
-if ($LASTEXITCODE -ne 0) { throw 'Docker failed. Start Docker Desktop and retry; no data volumes were removed.' }
+$demoDockerArguments=@((Join-Path $PSScriptRoot 'docker_environment.py'),'up')
+if ($Admin) {$demoDockerArguments+='--admin'}
+& $demoPython @demoDockerArguments
+if ($LASTEXITCODE -ne 0) { throw 'Docker failed. Inspect the message above; no data volumes were removed.' }
 $demoReady=$false
 for ($demoAttempt=0;$demoAttempt -lt 15;$demoAttempt++) {
-    docker exec codex-crypto-postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' 2>$null | Out-Null
+    docker compose --project-name crypto-bigdata --env-file (Join-Path $demoRepo '.env') -f (Join-Path $demoRepo 'docker-compose.yml') exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {$demoReady=$true;break}
     Start-Sleep -Seconds 2
 }

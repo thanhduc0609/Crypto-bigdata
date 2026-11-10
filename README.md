@@ -68,7 +68,7 @@ py -3.11 -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.local.lock.txt
 .venv/Scripts/python.exe scripts/research_artifacts.py restore
 .venv/Scripts/python.exe scripts/research_artifacts.py verify
-if (-not (Test-Path .env)) { Copy-Item configs/local.env.example .env }
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 notepad .env
 ```
 
@@ -83,10 +83,16 @@ quyền. Không đưa `.env` hoặc khóa vào Git/ảnh báo cáo. Không ghi �
 - Với cấu hình cũ chưa có policy, mặc định `inherit` giữ nguyên cách chọn S3/local.
 - Thiết lập `JAVA_HOME` nếu Java không được tìm thấy; xem mẫu cấu hình.
 
-Mở Docker Desktop, sau đó:
+Mở Docker Desktop. Repo chỉ dùng **`docker-compose.yml`**, nhóm **`crypto-bigdata`**.
+Nếu đã chạy bộ Docker cũ, chuyển dữ liệu một lần theo
+[hướng dẫn Docker](docs/DOCKER_SETUP.md) trước khi khởi động. Máy mới bỏ qua bước chuyển.
+Sau đó:
 
 ```powershell
 ./scripts/Start-LocalDemo.ps1 -Streaming -Batch
+# Chỉ cần xem web và kết quả nghiên cứu đã khôi phục:
+./scripts/Start-LocalDemo.ps1
+# Tùy chọn pgAdmin: điền PGADMIN_EMAIL/PGADMIN_PASSWORD trong .env rồi thêm -Admin.
 # Dừng các tiến trình của ứng dụng, giữ container, dữ liệu và checkpoint:
 ./scripts/Stop-LocalDemo.ps1
 ```
@@ -97,6 +103,8 @@ năng cần ngữ cảnh mới sẽ báo thiếu/cũ khi chưa đủ dữ liệu
 checkpoint để xử lý lỗi. Log/PID nằm trong `data/runtime/`.
 
 [Hướng dẫn vận hành, khôi phục và phạm vi kiểm chứng](docs/LOCAL_DEMO_HANDOVER.md).
+Lần mở lại không cần cài thư viện, tải lại lịch sử, huấn luyện hoặc chạy toàn bộ test.
+Web và streaming chạy liên tục; không cần đợi terminal kết thúc để mở trình duyệt.
 Các lệnh cài `requirements.txt` và launcher cũ trong lịch sử Git không thay thế
 quick-start đã kiểm chứng ở trên.
 

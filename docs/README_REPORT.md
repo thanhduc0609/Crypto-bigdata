@@ -1,5 +1,10 @@
 # 📊 BÁO CÁO ĐỒ ÁN MÔN HỌC: XỬ LÝ DỮ LIỆU LỚN (BIG DATA)
 
+> Bản mô tả lịch sử của dự án. Quy trình demo hiện hành dùng `Start-LocalDemo.ps1`
+> và một `docker-compose.yml`; xem [README](../README.md), [Docker](DOCKER_SETUP.md)
+> và [sườn báo cáo cập nhật](REPORT_OUTLINE.md) cho bài toán dự báo 36 tháng.
+> Không dùng các bước train/test bên dưới như điều kiện bắt buộc mỗi lần mở web.
+
 **ĐỀ TÀI:**  
 ### **XÂY DỰNG PIPELINE XỬ LÝ DỮ LIỆU LỚN THỜI GIAN THỰC VÀ HỒ DỮ LIỆU LAKEHOUSE CHO THỊ TRƯỜNG TIỀN MÃ HÓA (CRYPTO REAL-TIME STREAMING & MEDALLION LAKEHOUSE ANALYTICS PIPELINE)**
 
