@@ -18,7 +18,7 @@ def fixture(directory,n=3):
     as_of=end+pd.Timedelta(minutes=2)
     plan=dict(run_id=run_id,symbol="BTC-USDT",bar="1m",requested_start=start.isoformat(),requested_end=end.isoformat(),
               source_as_of=as_of.isoformat(),expected_rows=n,endpoint="https://example.test/history",docs="Synthetic fixture only",
-              bucket="unit-test-bucket",s3_prefix="crypto/local-runs/unit/canonical-repairs/"+run_id,ownership_token="fixture-owner",
+              bucket="unit-test-bucket",s3_prefix="crypto/canonical-repairs/"+run_id,ownership_token="fixture-owner",
               legacy_unknown_closed=n,legacy_continuity={"missing":0})
     rows=[[str(int((start+pd.Timedelta(minutes=i)).timestamp()*1000)),"100","110","90","105","2","2","210","1"] for i in range(n)]
     low=int(start.timestamp()*1000);high=int(end.timestamp()*1000)

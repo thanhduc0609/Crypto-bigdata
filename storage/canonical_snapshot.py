@@ -27,6 +27,9 @@ def load_descriptor(path=None):
         or "/canonical-repairs/" not in uri.path or any(p in (".","..") for p in uri.path.split("/"))
         or manifest.path != uri.path.removesuffix("/gold/candles_1m")+"/manifest.json"):
         raise ValueError("Canonical snapshot URI is not an owned repair version")
+    from storage.project_layout import resolve_uri
+    body['gold_uri']=resolve_uri(body['gold_uri'])
+    body['manifest_uri']=resolve_uri(body['manifest_uri'])
     return body
 
 

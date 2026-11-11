@@ -85,7 +85,7 @@ def main():
             from botocore.config import Config
             client = boto3.client("s3", region_name=os.getenv("AWS_REGION"),
                                  config=Config(connect_timeout=5, read_timeout=15, retries={"max_attempts": 2}))
-            reader = ReadOnlyS3(client, os.environ["S3_BUCKET_NAME"], os.getenv("S3_RUN_PREFIX"))
+            reader = ReadOnlyS3(client, os.environ["S3_BUCKET_NAME"], os.getenv("S3_PROJECT_PREFIX",os.getenv("S3_RUN_PREFIX")))
             manifest = reader.inventory()
             write_json(directory / "s3_inventory.json", manifest)
             downloaded = snapshot_objects(reader, manifest, directory / "snapshot")

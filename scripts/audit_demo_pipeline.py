@@ -21,8 +21,12 @@ from runtime.medallion import atomic_json
 
 
 def read_s3_frame(client,uri):
+    from storage.project_layout import resolve_uri
+    import re
+    uri=resolve_uri(uri)
     parsed=urlparse(uri);prefix=parsed.path.strip("/")+"/"
-    if not prefix.startswith(run_prefix()+"/medallion-runs/"):raise ValueError("Only owned operational versions can be audited")
+    if not re.fullmatch(re.escape(run_prefix())+r'/(silver/trades|gold/candles_1m)/[0-9]{8}T[0-9]{12}Z-[a-f0-9]{8}/',prefix):
+        raise ValueError("Only versioned project Silver/Gold can be audited")
     frames=[];files=[]
     for page in client.get_paginator("list_objects_v2").paginate(Bucket=parsed.netloc,Prefix=prefix):
         for obj in page.get("Contents",[]):
@@ -67,7 +71,7 @@ def main():
         kafka_equal=message.offset==int(selected.kafka_offset) and message.value.decode("utf-8")==selected.raw_payload
     finally:consumer.close(autocommit=False)
     payload=json.loads(selected.raw_payload)
-    checks=dict(kafka_record_matches_bronze=bool(kafka_equal),source_has_spark_commit_log=source["commit"]["mode"]=="spark_file_sink_log",
+    checks=dict(kafka_record_matches_bronze=bool(kafka_equal),source_has_spark_commit_log=source["commit"]["mode"] in ('spark_file_sink_log','spark_file_sink_logs'),
         source_manifest_bound_to_batch=hashlib.sha256((source_dir/"source.json").read_bytes()).hexdigest()==manifest["source_capture"]["source_manifest_sha256"],
         bronze_packed_checksum_valid=hashlib.sha256((source_dir/"bronze-input.parquet").read_bytes()).hexdigest()==source["packed_sha256"],
         bronze_trade_matches_silver=str(payload["trade_id"])==str(trade.trade_id) and float(payload["price"])==float(trade.price),

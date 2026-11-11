@@ -56,7 +56,8 @@ def run(service):
         spark=create_spark_session(app_name="CryptoLocalDemo",master="local[2]",include_kafka=True,
                                   include_s3=get_storage_mode()=="s3",include_postgres=False)
         try:
-            start_bronze_writer(spark,checkpoint_location=(checkpoint/"bronze").as_posix())
+            start_bronze_writer(spark,checkpoint_location=(checkpoint/"bronze").as_posix(),
+                                starting_offsets=os.getenv('BRONZE_STARTING_OFFSETS','latest'))
             processor.process_crypto_streams(spark)
         finally:spark.stop()
 

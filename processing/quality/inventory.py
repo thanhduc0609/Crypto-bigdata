@@ -47,6 +47,13 @@ def classify(key):
     if "long_term" in parts:
         end = parts.index("long_term") + 2
         return "forecast_snapshot", "/".join(parts[:end])
+    # Each writer/history owns a separate Spark metadata log. Combining those
+    # batch numbers would hide committed files. Batch versions are snapshots,
+    # not extra business trades to add together across repeated processing.
+    if len(parts)>=5 and parts[0]=='crypto' and parts[1] in ('bronze','streaming') and parts[3] in ('streams','history'):
+        return 'shared','/'.join(parts[:5])
+    if len(parts)>=4 and parts[0]=='crypto' and parts[1] in ('silver','gold') and re.fullmatch(r'[0-9]{8}T[0-9]{12}Z-[a-f0-9]{8}',parts[3]):
+        return 'operational_version','/'.join(parts[:4])
     for layer in ("bronze", "silver", "gold", "speed", "streaming", "raw"):
         if layer in parts:
             end = parts.index(layer) + 2

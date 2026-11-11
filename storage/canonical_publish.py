@@ -19,8 +19,8 @@ from storage.gold_lock import GoldLock
 class ImmutableRepairStore:
     def __init__(self,client,plan):
         self.client,self.bucket,self.prefix,self.run_id=client,plan["bucket"],plan["s3_prefix"].rstrip("/")+"/",plan["run_id"]
-        expected="/canonical-repairs/"+self.run_id+"/"
-        if not self.prefix.startswith("crypto/local-runs/") or not self.prefix.endswith(expected):
+        import re
+        if not re.fullmatch(r'crypto/canonical-repairs/'+re.escape(self.run_id)+'/',self.prefix):
             raise ValueError("Refusing publication outside an owned repair prefix")
         self.owner=json.dumps(dict(run_id=self.run_id,token=plan["ownership_token"]),sort_keys=True).encode()
         self.put_bytes("_OWNER.json",self.owner)

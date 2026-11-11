@@ -81,7 +81,8 @@ def run(args):
             import boto3
             bucket = os.environ['S3_BUCKET_NAME']
             # Unique run only; never overwrites the short-term model or shared Gold.
-            prefix = os.environ.get('S3_RUN_PREFIX', 'crypto').strip('/') + '/long_term/' + run_id
+            from storage.project_layout import project_prefix
+            prefix = project_prefix() + '/long_term/' + run_id
             client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'ap-southeast-1'))
             for name in ('raw_rows.json', 'source.json', 'daily.parquet', 'monthly.parquet', 'quality.json', 'forecast.json', 'forecast.csv', 'backtest.csv'):
                 client.upload_file(str(directory/name), bucket, prefix+'/'+name)

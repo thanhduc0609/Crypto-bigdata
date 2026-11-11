@@ -26,7 +26,7 @@ def capture(client,bucket,bronze_uri,directory,cache):
         listed += page.get("Contents",[])
     meta={}
     for obj in listed:
-        match=re.search(r"/_spark_metadata/(\d+)(\.compact)?$",obj["Key"])
+        match=re.fullmatch(re.escape(prefix)+r"_spark_metadata/(\d+)(\.compact)?",obj["Key"])
         if match:meta[(int(match[1]),bool(match[2]))]=obj
     if not meta:raise ValueError("No Spark commit log: cannot claim a committed Bronze snapshot")
     compact=max((i for i,is_compact in meta if is_compact),default=0)
@@ -67,4 +67,43 @@ def capture(client,bucket,bronze_uri,directory,cache):
     manifest=dict(captured_at=datetime.now(timezone.utc).isoformat(),commit=commit,files=files,
         rows=len(combined),packed_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),path=str(target))
     atomic_json(directory/"source.json",manifest)
+    return manifest
+
+
+def capture_project(client,bucket,directory,cache):
+    """Read committed logs separately for every writer/history, then combine raw rows."""
+    from storage.project_layout import project_prefix
+    directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
+    datasets=[]
+    for group in ('history','streams'):
+        prefix=project_prefix()+'/bronze/trades/'+group+'/'
+        for page in client.get_paginator('list_objects_v2').paginate(Bucket=bucket,Prefix=prefix,Delimiter='/'):
+            datasets.extend(item['Prefix'] for item in page.get('CommonPrefixes',[]))
+    if len(datasets)>64:raise ValueError('More than 64 Bronze datasets; compact history explicitly')
+    captures=[];skipped=[]
+    for index,prefix in enumerate(sorted(set(datasets))):
+        if '/history/' in prefix:
+            try:client.head_object(Bucket=bucket,Key=prefix+'_READY.json')
+            except Exception as exc:
+                if getattr(exc,'response',{}).get('Error',{}).get('Code') in ('NoSuchKey','404','NotFound'):
+                    skipped.append(dict(prefix=prefix,reason='Migration not published yet'));continue
+                raise
+        try:
+            result=capture(client,bucket,'s3a://'+bucket+'/'+prefix,directory/f'source-{index}',cache)
+            captures.append(result)
+        except ValueError as exc:
+            if '/streams/' in prefix and str(exc) in ('No Spark commit log: cannot claim a committed Bronze snapshot','Committed Bronze contains no records'):
+                skipped.append(dict(prefix=prefix,reason='No committed data yet'))
+            else:raise
+    if not captures:raise ValueError('No committed project Bronze datasets')
+    tables=[pq.ParquetFile(item['path']).read() for item in captures]
+    target=directory/'bronze-input.parquet'
+    combined=pa.concat_tables(tables,promote_options='default').replace_schema_metadata(None)
+    pq.write_table(combined,target,coerce_timestamps='us',version='1.0')
+    manifest=dict(captured_at=datetime.now(timezone.utc).isoformat(),
+        commit=dict(mode='spark_file_sink_logs',datasets=len(captures),
+                    sources=[item['commit'] for item in captures],skipped_uncommitted=skipped),
+        files=[file for item in captures for file in item['files']],rows=len(combined),
+        packed_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),path=str(target))
+    atomic_json(directory/'source.json',manifest)
     return manifest
