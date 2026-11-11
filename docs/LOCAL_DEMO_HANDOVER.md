@@ -8,9 +8,10 @@ Cập nhật giao diện 10/11/2026: `/` hoặc `/du-bao-3-nam` mở dự báo d
 `/thi-truong` mở thị trường trực tiếp. Hai trang có điều hướng chung.
 Xem [thu phóng, bố cục và chụp ảnh minh chứng](RESEARCH_UI.md).
 
-Bản bàn giao 09/11/2026. Các entry point đã nằm trong repo; không cần các wrapper
-`work/local-run/run_web.py`, `run_producer.py`, `run_streaming.py` để chạy phiên mới.
-Dữ liệu/checkpoint cũ được giữ và có thể được phát hiện để tiếp tục xử lý.
+Các entry point và checkpoint mới đều nằm trong repo, dưới `scripts/` và
+`data/runtime/`. Khi đổi địa chỉ S3, công cụ chuyển giữ offset đã commit để tạo
+checkpoint cho đích mới; checkpoint cũ được giữ làm bằng chứng phục hồi. Xem
+[cấu trúc S3](S3_LAYOUT.md), không khởi động bằng wrapper bên ngoài repo.
 
 ## Chạy trên máy hiện tại
 
@@ -47,8 +48,9 @@ bài thử xóa/recreate broker hoặc mô phỏng hỏng ổ đĩa.
   cài trên máy kiểm thử). `pip check` trên máy này không phát hiện dependency hỏng.
 - Khi chưa có `.env`, sao chép `.env.example`, điền thông tin thật ở
   máy cá nhân. Không ghi đè `.env` đang dùng và không đưa khóa vào Git/báo cáo.
-- S3_RUN_PREFIX phải có dạng `crypto/local-runs/<ten-phien>`; batch từ chối prefix
-  dùng chung. Quyền AWS phải phù hợp với bucket/prefix được nhóm cho phép.
+- Dùng `S3_PROJECT_PREFIX=crypto`. Bronze/Silver/Gold nằm trong cấu trúc chung
+  của nhóm; [hướng dẫn S3](S3_LAYOUT.md) mô tả chuyển địa chỉ, checkpoint và writer
+  riêng cho từng máy. Quyền AWS phải phù hợp bucket/prefix được nhóm cho phép.
 - Các file nghiên cứu đã khôi phục vẫn bị gitignore. Repo có gói phiên bản ở
   `artifacts/research/`; chạy `python scripts/research_artifacts.py restore`, rồi
   `python scripts/research_artifacts.py verify` trước khi mở web trên bản clone mới.

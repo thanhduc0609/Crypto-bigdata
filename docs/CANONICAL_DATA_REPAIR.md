@@ -48,11 +48,11 @@ thành chất lượng dự báo cao hơn.
 
 Gold đã kích hoạt:
 
-`s3://duke-crypto-bigdata-863819358922-ap-southeast-1-an/crypto/local-runs/codex-20261106T032328Z/canonical-repairs/20261109T063455Z-adb14c7395/gold/candles_1m`
+`s3://duke-crypto-bigdata-863819358922-ap-southeast-1-an/crypto/canonical-repairs/20261109T063455Z-adb14c7395/gold/candles_1m`
 
 Manifest:
 
-`s3://duke-crypto-bigdata-863819358922-ap-southeast-1-an/crypto/local-runs/codex-20261106T032328Z/canonical-repairs/20261109T063455Z-adb14c7395/manifest.json`
+`s3://duke-crypto-bigdata-863819358922-ap-southeast-1-an/crypto/canonical-repairs/20261109T063455Z-adb14c7395/manifest.json`
 
 SHA-256 Gold: `50a2a30a67c4e8d5280a5d44334ed153f28320a15d481b7649e440947b205dd5`.
 

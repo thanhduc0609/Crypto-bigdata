@@ -88,8 +88,8 @@ class PostgresTestSandbox:
             connection=self.connect()
             try:
                 with connection.cursor() as cur:
-                    cur.execute('CREATE TABLE public._codex_test_owner (token TEXT PRIMARY KEY, suite TEXT NOT NULL)')
-                    cur.execute('INSERT INTO public._codex_test_owner VALUES (%s,%s)',(self._token,self.suite))
+                    cur.execute('CREATE TABLE public._crypto_test_owner (token TEXT PRIMARY KEY, suite TEXT NOT NULL)')
+                    cur.execute('INSERT INTO public._crypto_test_owner VALUES (%s,%s)',(self._token,self.suite))
                 connection.commit()
                 with connection.cursor() as cur:
                     cur.execute((ROOT/'warehouse/sql/00_init_streaming_dw.sql').read_text(encoding='utf-8'))
@@ -128,7 +128,7 @@ class PostgresTestSandbox:
                 owner=self.connect()
                 try:
                     with owner.cursor() as cur:
-                        cur.execute('SELECT token,suite FROM public._codex_test_owner')
+                        cur.execute('SELECT token,suite FROM public._crypto_test_owner')
                         if cur.fetchall()!=[(self._token,self.suite)]:
                             raise RuntimeError('Owner marker mismatch; refusing to drop database')
                 finally:owner.close()

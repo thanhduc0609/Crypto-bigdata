@@ -76,7 +76,9 @@ notepad .env
 quyền. Không đưa `.env` hoặc khóa vào Git/ảnh báo cáo. Không ghi đè `.env` đang dùng.
 
 - `STORAGE_DESTINATION=s3`: dữ liệu vận hành ghi vào S3.
-- `S3_RUN_PREFIX=crypto/local-runs/<ten-phien>`: không dùng prefix dữ liệu chung.
+- `S3_PROJECT_PREFIX=crypto`: các tầng dữ liệu nằm trực tiếp dưới `crypto/`.
+  Mỗi máy có writer/checkpoint riêng trong từng tầng, không tạo thư mục cá nhân
+  bao quanh toàn dự án. [Cấu trúc S3 và chuyển dữ liệu cũ](docs/S3_LAYOUT.md).
 - `CANONICAL_SNAPSHOT_STORAGE=local`: đọc bản nghiên cứu đã khôi phục và kiểm
   checksum trên máy, độc lập với bucket vận hành. Không cần đổi URI nguồn trong
   descriptor hoặc giả lập dữ liệu. Mẫu `.env` đã chọn policy này.

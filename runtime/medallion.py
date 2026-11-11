@@ -23,7 +23,8 @@ def atomic_json(path,value):
 def version_paths(run_id,mode,bucket=None):
     if not re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[a-f0-9]{8}",run_id):raise ValueError("Invalid batch run id")
     if mode=="s3":
-        base=f"s3a://{bucket}/{run_prefix()}/medallion-runs/{run_id}"
+        from storage.project_layout import operational_paths
+        return operational_paths(run_id,bucket)
     elif mode=="local":base=(ROOT/"data/medallion_runs"/run_id).as_posix()
     else:raise ValueError("Unknown storage mode")
     return dict(silver=base+"/silver/trades",gold=base+"/gold/candles_1m",manifest=base+"/manifest.json")
@@ -55,10 +56,11 @@ def run_batch(sync_to_postgres=True):
                 import boto3
                 from botocore.config import Config
                 client=boto3.client("s3",config=Config(connect_timeout=5,read_timeout=20,retries={"max_attempts":1}))
-                prefix=run_prefix()+"/medallion-runs/"+run_id
+                from urllib.parse import urlparse
+                prefix=urlparse(paths['manifest']).path.lstrip('/').removesuffix('/manifest.json')
                 client.put_object(Bucket=bucket,Key=prefix+"/_owner.json",Body=json.dumps(dict(run_id=run_id)).encode(),IfNoneMatch="*")
-                from runtime.bronze_capture import capture
-                source=capture(client,bucket,manifest["bronze_path"],ROOT/"data/medallion_runs"/run_id,state/"bronze-cache")
+                from runtime.bronze_capture import capture_project
+                source=capture_project(client,bucket,ROOT/"data/medallion_runs"/run_id,state/"bronze-cache")
                 input_path=source["path"]
                 manifest["source_capture"]=dict(commit=source["commit"],rows=source["rows"],
                     packed_sha256=source["packed_sha256"],source_manifest_sha256=hashlib.sha256(

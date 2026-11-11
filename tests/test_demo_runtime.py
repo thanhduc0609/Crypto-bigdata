@@ -18,7 +18,7 @@ from runtime.bronze_capture import capture
 
 class FakeS3:
     def __init__(self):
-        self.prefix="crypto/local-runs/unit/bronze/trades/"
+        self.prefix="crypto/bronze/trades/streams/unit/"
         sink=io.BytesIO();pq.write_table(pa.table({"raw_payload":["synthetic"],"kafka_offset":[10]}),sink)
         self.objects={self.prefix+"part.parquet":sink.getvalue(),self.prefix+"orphan.parquet":sink.getvalue(),
             self.prefix+"_spark_metadata/0":("v1\n"+json.dumps(dict(path="s3a://unit/"+self.prefix+"part.parquet",action="add"))+"\n").encode()}
@@ -90,14 +90,14 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual(restart_delay(10,100),60)
         self.assertEqual(restart_delay(180,100),5)
     def test_shared_or_escape_prefix_rejected(self):
-        for value in ["crypto","crypto/gold","crypto/local-runs/../shared","crypto/local-runs/a/b",""]:
-            with patch.dict(os.environ,{"S3_RUN_PREFIX":value}):
+        for value in ["crypto/gold","crypto/../shared","crypto/a/b",""]:
+            with patch.dict(os.environ,{"S3_PROJECT_PREFIX":value}):
                 with self.assertRaises(ValueError):run_prefix()
 
     def test_operational_gold_cannot_be_frozen_repair(self):
-        with patch.dict(os.environ,{"S3_RUN_PREFIX":"crypto/local-runs/unit"}):
+        with patch.dict(os.environ,{"S3_PROJECT_PREFIX":"crypto"}):
             paths=version_paths("20260101T010203123456Z-0123abcd","s3","unit")
-            self.assertIn("/medallion-runs/",paths["gold"]);self.assertNotIn("canonical-repairs",paths["gold"])
+            self.assertIn("/crypto/gold/candles_1m/",paths["gold"]);self.assertNotIn("canonical-repairs",paths["gold"])
 
     def test_bad_version_rejected(self):
         with self.assertRaises(ValueError):version_paths("../../shared","local")

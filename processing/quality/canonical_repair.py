@@ -85,9 +85,8 @@ def prepare(audit_directory, as_of=None):
     directory.mkdir(parents=True, exist_ok=False)
     legacy.to_parquet(directory / "legacy_gold_before.parquet", index=False)
     warehouse.to_parquet(directory / "warehouse_before.parquet", index=False)
-    root_prefix = os.environ["S3_RUN_PREFIX"].strip("/")
-    if not root_prefix.startswith("crypto/local-runs/") or any(p in ("", ".", "..") for p in root_prefix.split("/")):
-        raise ValueError("Repair requires the configured project run namespace")
+    from storage.project_layout import project_prefix
+    root_prefix = project_prefix()
     plan = dict(run_id=run_id, state="prepared", symbol=SYMBOL, bar="1m", started_utc=now(),
                 requested_start=start.isoformat(), requested_end=end.isoformat(), source_as_of=as_of.isoformat(),
                 expected_rows=int((end-start).total_seconds()//60)+1,

@@ -112,7 +112,7 @@ def process_crypto_streams(spark: SparkSession):
         .format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_SERVER)
         .option("subscribe", KAFKA_TOPIC)
-        .option("startingOffsets", "latest")
+        .option("startingOffsets", os.getenv('SPEED_STARTING_OFFSETS','latest'))
         .option("failOnDataLoss", os.getenv("KAFKA_FAIL_ON_DATA_LOSS", "true"))
         .load()
     )

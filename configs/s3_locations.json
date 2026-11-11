@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "bucket": "duke-crypto-bigdata-863819358922-ap-southeast-1-an",
+  "source_prefix": "crypto/local-runs/codex-20261106T032328Z",
+  "migration_id": "20261110T092342653942Z"
+}

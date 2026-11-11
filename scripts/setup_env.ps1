@@ -300,64 +300,10 @@ Write-Host "====================================================================
 # 7. ĐIỀU PHỐI VẬN HÀNH DỰA TRÊN THAM SỐ (END-TO-END PIPELINE & CORE COMMANDS)
 # -----------------------------------------------------------------------------
 if ($StreamPipeline) {
-    Write-Host "`n==========================================================================" -ForegroundColor Cyan
-    Write-Host "  KICH HOAT TRON GOI PIPELINE STREAMING THOI GIAN THUC (SPEED LAYER)" -ForegroundColor Cyan
-    Write-Host "==========================================================================" -ForegroundColor Cyan
-
-    # 0. Dọn dẹp tiến trình stream cũ để tránh xung đột Checkpoint Spark Concurrent Update
-    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object { 
-        ($_.CommandLine -like "*$PROJECT_ROOT*" -or $_.CommandLine -like "*Crypto-bigdata*") -and
-        ($_.CommandLine -like "*trade_processor.py*" -or $_.CommandLine -like "*okx_producer.py*")
-    } | ForEach-Object { 
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue 
-    }
-
-    # 1. Bật Docker Containers
-    Write-Host "`n[1/3] Khoi dong Docker Containers (Kafka:9092 va PostgreSQL:5433)..." -ForegroundColor Yellow
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/docker_environment.py" up
-    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-        Write-Host "`n[ERROR] Failed to start Docker containers." -ForegroundColor Red
-        exit $LASTEXITCODE
-    }
-    Start-Sleep -Seconds 3
-
-    # 2. Khởi tạo Schema Database
-    Write-Host "`n[2/3] Kiem tra va khoi tao Schema Data Warehouse..." -ForegroundColor Yellow
-    try {
-        & $env:PYSPARK_PYTHON "$PROJECT_ROOT\warehouse\etl\db_config.py"
-        if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-            Write-Host "`n[ERROR] Database initialization failed with exit code $LASTEXITCODE." -ForegroundColor Red
-            exit $LASTEXITCODE
-        }
-    } catch {
-        Write-Warning "Database init encountered an issue: $_"
-    }
-
-    # 3. Mở cửa sổ riêng cho Producer và Spark Streaming Engine
-    Write-Host "`n[3/3] Mo cua so PowerShell rieng cho Producer va Spark Streaming..." -ForegroundColor Green
-    
-    $producerProc = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$PROJECT_ROOT\scripts\setup_env.ps1", "-RunProducer" -WorkingDirectory $PROJECT_ROOT -PassThru
-    Start-Sleep -Seconds 2
-
-    $sparkProc = Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$PROJECT_ROOT\scripts\setup_env.ps1", "-RunSpark" -WorkingDirectory $PROJECT_ROOT -PassThru
-
-    Write-Host "`n[SUCCESS] Pipeline Streaming da duoc kich hoat thanh cong trong 2 terminal rieng!" -ForegroundColor Cyan
-    Write-Host "  - Terminal 1 (PID $($producerProc.Id)): OKX WebSocket -> Kafka Producer (crypto-trades)" -ForegroundColor White
-    Write-Host "  - Terminal 2 (PID $($sparkProc.Id)): Spark Structured Streaming [Clean, 1m Candles, Whale Alert, S3 and DW]" -ForegroundColor White
-    Write-Host "`n[TIP] De chay truc tiep trong terminal hien tai thay vi mo cua so moi, su dung:" -ForegroundColor DarkYellow
-    Write-Host "  Terminal 1: .\scripts\setup_env.ps1 -RunProducer" -ForegroundColor DarkGray
-    Write-Host "  Terminal 2: .\scripts\setup_env.ps1 -RunSpark" -ForegroundColor DarkGray
+    & (Join-Path $PSScriptRoot 'Start-LocalDemo.ps1') -Streaming -Batch
 }
 elseif ($MedallionPipeline) {
-    Write-Host "`n==========================================================================" -ForegroundColor Cyan
-    Write-Host "  MEDALLION BATCH PIPELINE (BRONZE -> SILVER -> GOLD & DW SYNC)" -ForegroundColor Cyan
-    Write-Host "==========================================================================" -ForegroundColor Cyan
-
-    Invoke-PythonStep "Stage 1/3: Medallion Bronze Historical Ingestion" "$PROJECT_ROOT\ingestion\historical\bronze_ingestion.py" $ExtraArgs
-    Invoke-PythonStep "Stage 2/3: Medallion Silver Cleansing & Deduplication" "$PROJECT_ROOT\processing\batch\bronze_to_silver.py" $ExtraArgs
-    Invoke-PythonStep "Stage 3/3: Medallion Gold 1m OHLCV Aggregation & DW Sync" "$PROJECT_ROOT\processing\batch\silver_to_gold.py" $ExtraArgs
-
-    Write-Host "`n[SUCCESS] Medallion Pipeline completed all 3 stages successfully!" -ForegroundColor Green
+    Invoke-PythonStep "Versioned project Silver/Gold and DW sync" "$PROJECT_ROOT/scripts/run_batch_medallion.py" $ExtraArgs
 }
 elseif ($DockerUp) {
     Write-Host "`n[+] Starting Kafka and PostgreSQL Containers..." -ForegroundColor Yellow
@@ -371,10 +317,10 @@ elseif ($InitWarehouse) {
     Invoke-PythonStep "Initializing PostgreSQL DW Schema and Views" "$PROJECT_ROOT\warehouse\etl\db_config.py"
 }
 elseif ($RunProducer) {
-    Invoke-PythonStep "Launching OKX Market Data WebSocket Producer" "$PROJECT_ROOT\ingestion\streaming\okx_producer.py"
+    Invoke-PythonStep "Launching OKX Market Data WebSocket Producer" "$PROJECT_ROOT/scripts/local_service.py" @("producer")
 }
 elseif ($RunSpark) {
-    Invoke-PythonStep "Launching Spark Structured Streaming Processor (Whale Alerts and S3 Sink)" "$PROJECT_ROOT\processing\streaming\trade_processor.py"
+    Invoke-PythonStep "Launching Spark Structured Streaming Processor (Whale Alerts and S3 Sink)" "$PROJECT_ROOT/scripts/local_service.py" @("spark")
 }
 elseif ($TrainModel) {
     Invoke-PythonStep "Training XGBoost BTC Direction Classifier (5-Minute Horizon)" "$PROJECT_ROOT\scripts\train_model.py"
@@ -383,16 +329,9 @@ elseif ($RunPrediction) {
     Invoke-PythonStep "Running BTC 5-Minute Direction Inference Service" "$PROJECT_ROOT\scripts\run_prediction.py" $ExtraArgs
 }
 elseif ($WebDashboard) {
-    Write-Host "`n[>] Launching Web Analytics and Quant Trading Dashboard (Browser UI)..." -ForegroundColor Cyan
-    if ($WorkerMode) {
-        $env:PREDICTION_WORKER_MODE = $WorkerMode
-        Write-Host "    Prediction Worker Mode set to: $WorkerMode" -ForegroundColor DarkGray
-    }
-    Write-Host "    Open browser at: http://127.0.0.1:5000" -ForegroundColor Green
-    if (-not $NoBrowser) {
-        Start-Process "http://127.0.0.1:5000"
-    }
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT\web\app.py"
+    if ($WorkerMode) {$env:PREDICTION_WORKER_MODE = $WorkerMode}
+    & (Join-Path $PSScriptRoot 'Start-LocalDemo.ps1')
+    if (-not $NoBrowser) {Start-Process "http://127.0.0.1:5001"}
 }
 elseif ($TestPipeline) {
     Invoke-PythonStep "Running Full Pipeline & XGBoost Automated Test Suite" "$PROJECT_ROOT\tests\test_pipeline_e2e.py"
@@ -412,7 +351,7 @@ elseif (-not $Info) {
 
     Write-Host "`n[2] SPEED LAYER (REAL-TIME STREAMING END-TO-END):" -ForegroundColor Green
     Write-Host "  .\scripts\setup_env.ps1 -StreamPipeline   [1-CLICK BAT TRON GOI SPEED LAYER]" -ForegroundColor Green
-    Write-Host "    -> Tu bat Docker, khoi tao DB, mo Producer (WS) va Spark Streaming trong terminal rieng." -ForegroundColor DarkGray
+    Write-Host "    -> Dung launcher chung, quan ly PID/log va khong tao tien trinh trung." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -RunProducer" -ForegroundColor White
     Write-Host "    -> Chay rieng bo thu thap OKX WebSocket day vao Kafka topic (crypto-trades)." -ForegroundColor DarkGray
     Write-Host "  .\scripts\setup_env.ps1 -RunSpark" -ForegroundColor White

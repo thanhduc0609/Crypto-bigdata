@@ -12,6 +12,7 @@ MODULES=[
     'tests.test_long_term_forecast','tests.test_long_term_research','tests.test_demo_runtime',
     'tests.test_research_pages','tests.test_research_artifacts','tests.test_smoke_imports',
     'tests.test_docker_environment',
+    'tests.test_project_storage',
 ]
 
 

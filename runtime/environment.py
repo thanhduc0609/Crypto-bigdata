@@ -1,7 +1,6 @@
 """Portable local settings; credentials stay in the ignored environment file."""
 import os
 from pathlib import Path
-import re
 import shutil
 import sys
 from processing.core.env import load_env_vars
@@ -10,10 +9,8 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def run_prefix():
-    value=os.getenv("S3_RUN_PREFIX","").strip("/")
-    if not re.fullmatch(r"crypto/local-runs/[A-Za-z0-9_-]+",value):
-        raise ValueError("Set S3_RUN_PREFIX to crypto/local-runs/<project-run>; shared prefixes are not writable")
-    return value
+    from storage.project_layout import project_prefix
+    return project_prefix()
 
 
 def state_directory():
@@ -45,16 +42,19 @@ def configure(spark=False):
     # Keep the configured run scoped consistently across producer, stream and batch.
     from storage.s3 import get_storage_mode,storage_cfg
     if get_storage_mode()=="s3":
+        from storage.project_layout import writer_id,starting_offsets
         prefix=run_prefix()
+        writer=writer_id()
         storage_cfg.setdefault("s3",{}).update({
-            "bronze_path":prefix+"/bronze/trades","silver_path":prefix+"/silver/trades",
-            "gold_candles_path":prefix+"/gold/candles_1m","speed_candles_path":prefix+"/speed/candles_1m"})
+            "bronze_path":prefix+"/bronze/trades/streams/"+writer,"silver_path":prefix+"/silver/trades",
+            "gold_candles_path":prefix+"/gold/candles_1m","speed_candles_path":prefix+"/streaming/candles_1m/streams/"+writer})
+        os.environ.setdefault('BRONZE_STARTING_OFFSETS',starting_offsets('bronze'))
+        os.environ.setdefault('SPEED_STARTING_OFFSETS',starting_offsets('speed'))
     return state
 
 
 def stream_checkpoints():
-    """Reuse an existing compatible checkpoint during migration; never erase it."""
+    """New destination gets new checkpoints; the migration saves source offsets."""
     from storage.s3 import get_storage_mode
-    prefix=run_prefix().replace("/","_") if get_storage_mode()=="s3" else "local"
-    legacy=ROOT.parent/"local-run/state"/prefix
-    return legacy if legacy.exists() else state_directory()/"checkpoints"/prefix
+    from storage.project_layout import writer_id
+    return state_directory()/"checkpoints"/(writer_id() if get_storage_mode()=="s3" else "local")
