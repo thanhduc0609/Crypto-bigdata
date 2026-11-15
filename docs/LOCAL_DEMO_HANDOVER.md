@@ -18,7 +18,7 @@ checkpoint cho đích mới; checkpoint cũ được giữ làm bằng chứng p
 Mở Docker Desktop, mở PowerShell tại thư mục repo:
 
 ```powershell
-./scripts/Start-LocalDemo.ps1 -Streaming
+.\scripts\setup_env.ps1 -StartDemo -Streaming
 # Lần gọi tiếp theo nhận ra các tiến trình đang chạy, không tạo bản trùng.
 ```
 
@@ -28,12 +28,10 @@ xem các số đo thực tế ở bảng Luồng dữ liệu & chất lượng.
 
 ```powershell
 # Dừng ứng dụng, giữ container, volume và checkpoint:
-./scripts/Stop-LocalDemo.ps1
-# Chỉ dừng web nếu cần sửa giao diện:
-./scripts/Stop-LocalDemo.ps1 -Service web
+.\scripts\setup_env.ps1 -StopDemo
 ```
 
-`Start-LocalDemo.ps1` không recreate các container sẵn có. Không xóa Kafka,
+`setup_env.ps1 -StartDemo` không recreate các container sẵn có. Không xóa Kafka,
 checkpoint hay volume để chữa lỗi nếu chưa có phương án backup/migration.
 Volume Kafka trong compose dành cho lần tạo container mới; container cũ hiện có
 được giữ nguyên. Kiểm tra phục hồi đã thực hiện trên runtime hiện tại, không phải
@@ -44,7 +42,7 @@ bài thử xóa/recreate broker hoặc mô phỏng hỏng ổ đĩa.
 - Python 3.11; Java 8/11/17 phù hợp Spark 3.5; Docker Desktop và PowerShell.
 - Bản đã kiểm chứng sử dụng Java 8 trên Windows. Thiết lập JAVA_HOME nếu tự tìm
   Java không chọn đúng; không cần hạ chính sách bảo mật hệ điều hành.
-- Tạo venv mới khi chưa có và cài `requirements.local.lock.txt` (phiên bản thực
+- Tạo venv mới khi chưa có và cài `requirements.txt` (phiên bản thực
   cài trên máy kiểm thử). `pip check` trên máy này không phát hiện dependency hỏng.
 - Khi chưa có `.env`, sao chép `.env.example`, điền thông tin thật ở
   máy cá nhân. Không ghi đè `.env` đang dùng và không đưa khóa vào Git/báo cáo.
@@ -52,8 +50,8 @@ bài thử xóa/recreate broker hoặc mô phỏng hỏng ổ đĩa.
   của nhóm; [hướng dẫn S3](S3_LAYOUT.md) mô tả chuyển địa chỉ, checkpoint và writer
   riêng cho từng máy. Quyền AWS phải phù hợp bucket/prefix được nhóm cho phép.
 - Các file nghiên cứu đã khôi phục vẫn bị gitignore. Repo có gói phiên bản ở
-  `artifacts/research/`; chạy `python scripts/research_artifacts.py restore`, rồi
-  `python scripts/research_artifacts.py verify` trước khi mở web trên bản clone mới.
+  `artifacts/research/`; chạy `python scripts/quality/research_artifacts.py restore`, rồi
+  `python scripts/quality/research_artifacts.py verify` trước khi mở web trên bản clone mới.
   Gói không khôi phục DB live/checkpoint hoặc toàn bộ raw stream/audit trên S3.
 - `CANONICAL_SNAPSHOT_STORAGE=local` trong env mẫu dùng bản canonical nghiên cứu
   đã kiểm checksum, độc lập với bucket S3 vận hành. Cấu hình cũ không đặt biến này
@@ -126,16 +124,16 @@ tránh làm mất các cột nguồn trong lần Spark đọc kế tiếp.
 ## Lệnh kiểm tra khi cần
 
 ```powershell
-.venv/Scripts/python.exe scripts/monitor_demo.py
-.venv/Scripts/python.exe scripts/audit_demo_pipeline.py
-.venv/Scripts/python.exe scripts/verify_short_term_experiment.py data/ml_experiments/20261109T074901815206Z
+.venv/Scripts/python.exe scripts/demo/monitor_demo.py
+.venv/Scripts/python.exe scripts/demo/audit_demo_pipeline.py
+.venv/Scripts/python.exe scripts/ml/verify_short_term_experiment.py data/ml_experiments/20261109T074901815206Z
 ```
 
 Các crash test chỉ dùng khi chủ động kiểm thử, không chạy giữa buổi thuyết trình:
 
 ```powershell
-.venv/Scripts/python.exe scripts/check_demo_recovery.py spark
-.venv/Scripts/python.exe scripts/check_demo_recovery.py producer
+.venv/Scripts/python.exe scripts/demo/check_demo_recovery.py spark
+.venv/Scripts/python.exe scripts/demo/check_demo_recovery.py producer
 ```
 
 Sườn báo cáo được bàn giao để duyệt trước. Chưa viết thay nội dung từng chương;

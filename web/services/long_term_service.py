@@ -43,7 +43,7 @@ def load_forecast(directory):
     root = Path(directory)
     pointer = root / 'current.json'
     if not pointer.exists():
-        return {'status': 'empty', 'message': 'Chưa có dự báo 3 năm. Chạy python scripts/research_artifacts.py restore để khôi phục phiên đã công bố, hoặc python scripts/run_long_term.py để tạo phiên mới.'}, 404
+        return {'status': 'empty', 'message': 'Chưa có dự báo 3 năm. Chạy python scripts/quality/research_artifacts.py restore để khôi phục phiên đã công bố, hoặc python scripts/ml/run_long_term.py để tạo phiên mới.'}, 404
     try:
         manifest = json.loads(pointer.read_text(encoding='utf-8'))
         run_id = manifest['run_id']

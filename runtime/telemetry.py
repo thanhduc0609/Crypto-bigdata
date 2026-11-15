@@ -42,10 +42,11 @@ def checkpoint_offsets(directory):
 
 
 def kafka_probe():
-    from kafka import KafkaConsumer,TopicPartition
+    from kafka import KafkaConsumer
+    from kafka.structs import TopicPartition
     topic=os.getenv("KAFKA_TOPIC_TRADES","crypto-trades")
     consumer=KafkaConsumer(bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS","127.0.0.1:9092"),
-        enable_auto_commit=False,group_id=None,request_timeout_ms=5000,bootstrap_timeout_ms=3000,
+        enable_auto_commit=False,group_id=None,request_timeout_ms=5000,
         session_timeout_ms=4000,consumer_timeout_ms=3000)
     try:
         parts=consumer.partitions_for_topic(topic)

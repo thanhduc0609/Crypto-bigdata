@@ -63,10 +63,10 @@ gian, checksum code/model, giữ nguyên canonical pointer và artifact hiện h
 
 ```powershell
 .venv\Scripts\python.exe -m unittest tests.test_short_term_experiment tests.test_prediction_evaluation tests.test_orderflow_and_worker -v
-.venv\Scripts\python.exe scripts/verify_short_term_experiment.py data/ml_experiments/20261109T074901815206Z
+.venv\Scripts\python.exe scripts/ml/verify_short_term_experiment.py data/ml_experiments/20261109T074901815206Z
 # Phiên nghiên cứu mới, không phải kiểm định độc lập nếu vẫn dùng lại cùng test:
-.venv\Scripts\python.exe scripts/run_short_term_experiment.py select
-.venv\Scripts\python.exe scripts/run_short_term_experiment.py evaluate --run data/ml_experiments/<run-id>
+.venv\Scripts\python.exe scripts/ml/run_short_term_experiment.py select
+.venv\Scripts\python.exe scripts/ml/run_short_term_experiment.py evaluate --run data/ml_experiments/<run-id>
 ```
 
 Mỗi run lưu `protocol.json`, `provenance.json`, `selection.json`, mốc mở holdout,

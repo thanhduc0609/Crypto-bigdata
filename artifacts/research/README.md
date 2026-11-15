@@ -16,8 +16,8 @@ Gói này phục vụ tái lập bài đồ án, không chứa DB live hoặc to
 Sau khi cài dependency:
 
 ```powershell
-python scripts/research_artifacts.py restore
-python scripts/research_artifacts.py verify
+python scripts/quality/research_artifacts.py restore
+python scripts/quality/research_artifacts.py verify
 ```
 
 Lệnh chỉ dùng dữ liệu trong gói tin cậy đi kèm repo, không tải mạng hoặc train.
@@ -37,7 +37,7 @@ code khi kiểm chứng; không cập nhật checksum của thí nghiệm cũ đ
 ## Tái lập và giới hạn
 
 ```powershell
-python scripts/check_project.py
+python scripts/quality/check_project.py
 ```
 
 Runner có kiểm chứng 16 điều kiện của ML đã công bố và không thay mô hình đang

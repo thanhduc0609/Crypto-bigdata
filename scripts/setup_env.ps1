@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # Crypto Big Data - Real-time Streaming & Medallion Pipeline Orchestration (PowerShell)
 # =============================================================================
 # KIẾN TRÚC HỆ THỐNG: SPEED LAYER + MEDALLION BATCH DATA LAKE
@@ -53,7 +53,15 @@ param (
     [string]$WorkerMode = "",
     [switch]$NoBrowser,
 
-    # [8] Kiểm thử tự động toàn diện End-to-End
+    # [8] Trọn gói Local Demo (Khởi chạy & Dừng an toàn)
+    [Alias("Demo")]
+    [switch]$StartDemo,
+    [switch]$StopDemo,
+    [switch]$Streaming,
+    [switch]$Batch,
+    [switch]$Admin,
+
+    # [9] Kiểm thử tự động toàn diện End-to-End
     [switch]$TestPipeline,
 
     # [9] Tham số mở rộng (Pass-through arguments)
@@ -297,41 +305,164 @@ Write-Host " [OK] PostgreSQL DW    : $($v.Postgres)" -ForegroundColor $(if ($v.P
 Write-Host "==========================================================================" -ForegroundColor Cyan
 
 # -----------------------------------------------------------------------------
-# 7. ĐIỀU PHỐI VẬN HÀNH DỰA TRÊN THAM SỐ (END-TO-END PIPELINE & CORE COMMANDS)
+# 7. HÀM QUẢN LÝ VÒNG ĐỜI DEMO CỤC BỘ (SELF-CONTAINED LOCAL DEMO ORCHESTRATION)
+# -----------------------------------------------------------------------------
+function Start-ProjectLocalDemo {
+    param(
+        [switch]$Streaming,
+        [switch]$Batch,
+        [switch]$Admin
+    )
+    $demoRepo = $PROJECT_ROOT
+    $demoPython = Join-Path $demoRepo '.venv\Scripts\python.exe'
+    $demoState = Join-Path $demoRepo 'data\runtime'
+    $demoLogs = Join-Path $demoState 'logs'
+    if (-not (Test-Path -LiteralPath $demoPython)) { throw 'Python virtual environment (.venv) not found. Create .venv and install requirements.txt first.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $demoRepo '.env'))) { throw 'Copy .env.example to .env and fill the settings.' }
+    New-Item -ItemType Directory -Path $demoLogs -Force | Out-Null
+    $demoDockerArguments = @((Join-Path $PSScriptRoot 'demo\docker_environment.py'), 'up')
+    if ($Admin) { $demoDockerArguments += '--admin' }
+    & $demoPython @demoDockerArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Docker failed. Inspect the message above; no data volumes were removed.' }
+    $demoReady = $false
+    for ($demoAttempt = 0; $demoAttempt -lt 15; $demoAttempt++) {
+        docker compose --project-name crypto-bigdata --env-file (Join-Path $demoRepo '.env') -f (Join-Path $demoRepo 'docker-compose.yml') exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { $demoReady = $true; break }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $demoReady) { throw 'PostgreSQL is not ready; inspect Docker logs.' }
+    $demoServices = @(
+        @{Name = 'web'; Script = 'scripts\demo\local_service.py'; Args = @('web') },
+        @{Name = 'monitor'; Script = 'scripts\demo\monitor_demo.py'; Args = @('--watch') }
+    )
+    if ($Streaming) {
+        $demoServices += @{Name = 'producer'; Script = 'scripts\demo\local_service.py'; Args = @('producer') }
+        $demoServices += @{Name = 'spark'; Script = 'scripts\demo\local_service.py'; Args = @('spark') }
+    }
+    if ($Batch -or $Streaming) {
+        $demoServices += @{Name = 'batch'; Script = 'scripts\pipeline\run_batch_medallion.py'; Args = @('--watch', '--interval', '300') }
+    }
+    foreach ($demoService in $demoServices) {
+        $demoScript = Join-Path $demoRepo $demoService.Script
+        $demoPidFile = Join-Path $demoState ($demoService.Name + '.pid')
+        if (Test-Path -LiteralPath $demoPidFile) {
+            $demoExistingId = [int](Get-Content -LiteralPath $demoPidFile -Raw)
+            $demoExisting = Get-CimInstance Win32_Process -Filter "ProcessId = $demoExistingId" -ErrorAction SilentlyContinue
+            if ($demoExisting -and $demoExisting.CommandLine.Contains($demoScript) -and $demoExisting.CommandLine.Contains($demoService.Args[0])) {
+                Write-Host ($demoService.Name + ' already running')
+                continue
+            }
+        }
+        $demoArguments = @('-u', ('"' + $demoScript + '"')) + $demoService.Args
+        $demoOldZone = $env:TZ
+        try {
+            $env:TZ = 'UTC'
+            $demoProcess = Start-Process -FilePath $demoPython -ArgumentList $demoArguments -WorkingDirectory $demoRepo -WindowStyle Hidden -RedirectStandardOutput (Join-Path $demoLogs ($demoService.Name + '.out.log')) -RedirectStandardError (Join-Path $demoLogs ($demoService.Name + '.err.log')) -PassThru
+        }
+        finally { $env:TZ = $demoOldZone }
+        Set-Content -LiteralPath $demoPidFile -Value $demoProcess.Id
+        Write-Host ($demoService.Name + ' started: ' + $demoProcess.Id)
+    }
+    $demoWebReady = $false
+    for ($demoAttempt = 0; $demoAttempt -lt 20; $demoAttempt++) {
+        try {
+            $demoHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:5001/api/health' -TimeoutSec 2
+            if ($demoHealth.database_connected -and $demoHealth.status -eq 'online') { $demoWebReady = $true; break }
+        }
+        catch {}
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $demoWebReady) { throw 'Web or database did not become ready; inspect data/runtime/logs.' }
+    Write-Host 'Dashboard ready: http://127.0.0.1:5001 | Process logs: data/runtime/logs'
+    Write-Host 'Readiness: /api/system/status reports measured stages; startup alone is not an end-to-end pass.'
+}
+
+function Stop-ProjectLocalDemo {
+    param(
+        [switch]$IncludeLegacy,
+        [string[]]$Service = @('batch', 'monitor', 'producer', 'spark', 'web')
+    )
+    $demoRepo = $PROJECT_ROOT
+    $demoState = Join-Path $demoRepo 'data\runtime'
+
+    function Stop-OwnedService($demoPidFile, $demoExpectedScript, $demoExpectedArgument) {
+        if (-not (Test-Path -LiteralPath $demoPidFile)) { return }
+        $demoProcessId = [int](Get-Content -LiteralPath $demoPidFile -Raw)
+        $demoProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $demoProcessId" -ErrorAction SilentlyContinue
+        if (-not $demoProcess) { return }
+        if (-not $demoProcess.CommandLine.Contains($demoExpectedScript) -or ($demoExpectedArgument -and -not $demoProcess.CommandLine.Contains($demoExpectedArgument))) {
+            throw ('Refusing to stop an unowned PID ' + $demoProcessId)
+        }
+        $demoAll = @(Get-CimInstance Win32_Process)
+        function Stop-ChildTree([int]$demoParent) {
+            foreach ($demoChild in $demoAll | Where-Object { $_.ParentProcessId -eq $demoParent }) {
+                Stop-ChildTree $demoChild.ProcessId
+                Stop-Process -Id $demoChild.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Stop-ChildTree $demoProcessId
+        Stop-Process -Id $demoProcessId -Force -ErrorAction SilentlyContinue
+        Write-Host ('Stopped owned service ' + $demoProcessId)
+    }
+
+    foreach ($demoName in $Service) {
+        $demoScript = if ($demoName -eq 'batch') { 'run_batch_medallion.py' } elseif ($demoName -eq 'monitor') { 'monitor_demo.py' } else { 'local_service.py' }
+        $demoArgument = if ($demoName -in @('producer', 'spark', 'web')) { $demoName } else { '' }
+        Stop-OwnedService (Join-Path $demoState ($demoName + '.pid')) $demoScript $demoArgument
+    }
+    if ($IncludeLegacy) {
+        $demoLegacy = Join-Path (Split-Path -Parent $demoRepo) 'local-run'
+        foreach ($demoName in ($Service | Where-Object { $_ -in @('producer', 'spark', 'web') })) {
+            $demoFile = if ($demoName -eq 'spark') { 'run_streaming.py' } else { 'run_' + $demoName + '.py' }
+            Stop-OwnedService (Join-Path $demoLegacy ($demoName + '.pid')) $demoFile ''
+        }
+    }
+    Write-Host 'Docker services, persisted data and checkpoints are retained.'
+}
+
+# -----------------------------------------------------------------------------
+# 8. ĐIỀU PHỐI VẬN HÀNH DỰA TRÊN THAM SỐ (END-TO-END PIPELINE & CORE COMMANDS)
 # -----------------------------------------------------------------------------
 if ($StreamPipeline) {
-    & (Join-Path $PSScriptRoot 'Start-LocalDemo.ps1') -Streaming -Batch
+    Start-ProjectLocalDemo -Streaming -Batch
+}
+elseif ($StartDemo) {
+    Start-ProjectLocalDemo -Streaming:$Streaming -Batch:$Batch -Admin:$Admin
+    if (-not $NoBrowser) { Start-Process "http://127.0.0.1:5001" }
+}
+elseif ($StopDemo) {
+    Stop-ProjectLocalDemo -IncludeLegacy
 }
 elseif ($MedallionPipeline) {
-    Invoke-PythonStep "Versioned project Silver/Gold and DW sync" "$PROJECT_ROOT/scripts/run_batch_medallion.py" $ExtraArgs
+    Invoke-PythonStep "Versioned project Silver/Gold and DW sync" "$PROJECT_ROOT/scripts/pipeline/run_batch_medallion.py" $ExtraArgs
 }
 elseif ($DockerUp) {
     Write-Host "`n[+] Starting Kafka and PostgreSQL Containers..." -ForegroundColor Yellow
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/docker_environment.py" up
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/demo/docker_environment.py" up
 }
 elseif ($DockerDown) {
     Write-Host "`n[-] Stopping Docker Containers..." -ForegroundColor Yellow
-    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/docker_environment.py" stop
+    & $env:PYSPARK_PYTHON "$PROJECT_ROOT/scripts/demo/docker_environment.py" stop
 }
 elseif ($InitWarehouse) {
     Invoke-PythonStep "Initializing PostgreSQL DW Schema and Views" "$PROJECT_ROOT\warehouse\etl\db_config.py"
 }
 elseif ($RunProducer) {
-    Invoke-PythonStep "Launching OKX Market Data WebSocket Producer" "$PROJECT_ROOT/scripts/local_service.py" @("producer")
+    Invoke-PythonStep "Launching OKX Market Data WebSocket Producer" "$PROJECT_ROOT/scripts/demo/local_service.py" @("producer")
 }
 elseif ($RunSpark) {
-    Invoke-PythonStep "Launching Spark Structured Streaming Processor (Whale Alerts and S3 Sink)" "$PROJECT_ROOT/scripts/local_service.py" @("spark")
+    Invoke-PythonStep "Launching Spark Structured Streaming Processor (Whale Alerts and S3 Sink)" "$PROJECT_ROOT/scripts/demo/local_service.py" @("spark")
 }
 elseif ($TrainModel) {
-    Invoke-PythonStep "Training XGBoost BTC Direction Classifier (5-Minute Horizon)" "$PROJECT_ROOT\scripts\train_model.py"
+    Invoke-PythonStep "Training XGBoost BTC Direction Classifier (5-Minute Horizon)" "$PROJECT_ROOT\scripts\ml\train_model.py"
 }
 elseif ($RunPrediction) {
-    Invoke-PythonStep "Running BTC 5-Minute Direction Inference Service" "$PROJECT_ROOT\scripts\run_prediction.py" $ExtraArgs
+    Invoke-PythonStep "Running BTC 5-Minute Direction Inference Service" "$PROJECT_ROOT\scripts\ml\run_prediction.py" $ExtraArgs
 }
 elseif ($WebDashboard) {
-    if ($WorkerMode) {$env:PREDICTION_WORKER_MODE = $WorkerMode}
-    & (Join-Path $PSScriptRoot 'Start-LocalDemo.ps1')
-    if (-not $NoBrowser) {Start-Process "http://127.0.0.1:5001"}
+    if ($WorkerMode) { $env:PREDICTION_WORKER_MODE = $WorkerMode }
+    Start-ProjectLocalDemo
+    if (-not $NoBrowser) { Start-Process "http://127.0.0.1:5001" }
 }
 elseif ($TestPipeline) {
     Invoke-PythonStep "Running Full Pipeline & XGBoost Automated Test Suite" "$PROJECT_ROOT\tests\test_pipeline_e2e.py"
@@ -367,9 +498,15 @@ elseif (-not $Info) {
     Write-Host "  .\scripts\setup_env.ps1 -RunPrediction" -ForegroundColor White
     Write-Host "    -> Chay dich vu suy luan real-time (ho tro --once hoac continuous loop), luu vao DW." -ForegroundColor DarkGray
 
-    Write-Host "`n[5] GIAO DIEN TRUC QUAN HOA (WEB DASHBOARD):" -ForegroundColor Magenta
-    Write-Host "  .\scripts\setup_env.ps1 -WebDashboard     [WEB TRADING & ML DASHBOARD]" -ForegroundColor Green
-    Write-Host "    -> Khoi chay Web Dashboard tai http://127.0.0.1:5000 (Tuy chon: -WorkerMode auto/manual/off, -NoBrowser)." -ForegroundColor DarkGray
+    Write-Host "`n[5] GIAO DIEN TRUC QUAN HOA VA TRON GOI LOCAL DEMO:" -ForegroundColor Magenta
+    Write-Host "  .\scripts\setup_env.ps1 -StartDemo        [1-CLICK KHOI CHAY LOCAL DEMO]" -ForegroundColor Green
+    Write-Host "    -> Bat Docker, Web Dashboard tai http://127.0.0.1:5001 va tu dong giam sat." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -StartDemo -Streaming -Batch" -ForegroundColor White
+    Write-Host "    -> Bat tron goi ca Speed Layer (OKX Producer, Spark Streaming) va Medallion Batch." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -StopDemo         [1-CLICK DUNG AN TOAN LOCAL DEMO]" -ForegroundColor Red
+    Write-Host "    -> Dung sach se toan bo cac tien trinh web, spark, producer, batch va monitor." -ForegroundColor DarkGray
+    Write-Host "  .\scripts\setup_env.ps1 -WebDashboard     [WEB TRADING & ML DASHBOARD]" -ForegroundColor White
+    Write-Host "    -> Khoi chay rieng Web Dashboard tai http://127.0.0.1:5001 (Tuy chon: -WorkerMode, -NoBrowser)." -ForegroundColor DarkGray
 
     Write-Host "`n[6] KIEM THU TOAN DIEN & TIEN ICH:" -ForegroundColor DarkYellow
     Write-Host "  .\scripts\setup_env.ps1 -TestPipeline" -ForegroundColor White

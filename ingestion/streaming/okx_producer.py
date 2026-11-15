@@ -28,7 +28,7 @@ load_env_vars()
 # CONFIGURATION (Strictly BTC-USDT Only)
 # =============================================================================
 OKX_WS_URL = os.getenv("OKX_WS_URL", "wss://ws.okx.com:8443/ws/v5/public")
-KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9092")
 TOPIC = os.getenv("KAFKA_TOPIC_TRADES", os.getenv("KAFKA_TOPIC", "crypto-trades"))
 TARGET_SYMBOL = "BTC-USDT"
 BTC_PARTITION = 0

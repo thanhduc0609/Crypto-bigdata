@@ -81,10 +81,11 @@ class ReadOnlyS3:
                     scope="Current objects only; not version history; listing is not an atomic S3 snapshot", objects=rows)
 
     def download(self, item, destination):
-        path = Path(destination) / item["key"]
-        # Object keys are untrusted filesystem paths.
         root = Path(destination).resolve()
-        if not path.resolve().is_relative_to(root) or "\\" in item["key"]:
+        root.mkdir(parents=True, exist_ok=True)
+        path = (root / item["key"]).resolve()
+        # Object keys are untrusted filesystem paths.
+        if not path.is_relative_to(root) or "\\" in item["key"]:
             raise ValueError("Unsafe object key")
         response = self.client.get_object(Bucket=self.bucket, Key=item["key"], IfMatch=item["etag"])
         try:

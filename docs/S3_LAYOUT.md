@@ -50,14 +50,14 @@ Mở PowerShell ở repo. Chỉ một thành viên thực hiện chuyển kho ch
 dừng writer cũ để chốt nguồn. Điền đúng bucket/key đang dùng; không chia sẻ `.env`.
 
 ```powershell
-./scripts/Stop-LocalDemo.ps1 -IncludeLegacy
-.venv/Scripts/python.exe scripts/organize_s3.py prepare --source-prefix crypto/local-runs/<ten-cu>
-.venv/Scripts/python.exe scripts/organize_s3.py copy
-./scripts/Start-LocalDemo.ps1 -Streaming -Batch
+.\scripts\setup_env.ps1 -StopDemo
+.venv/Scripts/python.exe scripts/pipeline/organize_s3.py prepare --source-prefix crypto/local-runs/<ten-cu>
+.venv/Scripts/python.exe scripts/pipeline/organize_s3.py copy
+.\scripts\setup_env.ps1 -StartDemo -Streaming -Batch
 # Chờ Silver/Gold mới thành công, sau đó đối soát chỉ đọc:
-.venv/Scripts/python.exe scripts/audit_demo_pipeline.py
+.venv/Scripts/python.exe scripts/demo/audit_demo_pipeline.py
 # Dùng đúng đường dẫn audit mới vừa tạo:
-.venv/Scripts/python.exe scripts/organize_s3.py finish --audit data/demo_audits/<id>/pipeline-audit.json
+.venv/Scripts/python.exe scripts/pipeline/organize_s3.py finish --audit data/demo_audits/<id>/pipeline-audit.json
 ```
 
 Nếu một batch cũ còn hoàn tất trong lúc chuyển, dữ liệu của nó vẫn ở nguồn.

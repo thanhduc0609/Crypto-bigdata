@@ -10,8 +10,8 @@ Làm phần cài đặt trong README: Python 3.11, Java, Docker Desktop, venv, t
 khôi phục/verify gói nghiên cứu và điền `.env` từ `.env.example`. Sau đó:
 
 ```powershell
-./scripts/Start-LocalDemo.ps1                  # Web + monitor, không thu thập mới
-./scripts/Start-LocalDemo.ps1 -Streaming -Batch # Toàn luồng vận hành
+.\scripts\setup_env.ps1 -StartDemo                  # Web + monitor, không thu thập mới
+.\scripts\setup_env.ps1 -StartDemo -Streaming -Batch # Toàn luồng vận hành
 ```
 
 Không phải chạy lại cài đặt, thu thập lịch sử, train model hoặc toàn bộ test mỗi
@@ -26,16 +26,16 @@ khởi tạo volume mới, khiến nhìn như mất dữ liệu. Launcher chính
 container cũ và chặn trường hợp này trước khi tạo database.
 
 ```powershell
-.venv/Scripts/python.exe scripts/docker_environment.py status
-./scripts/Merge-Docker.ps1
+.venv/Scripts/python.exe scripts/demo/docker_environment.py status
+.venv/Scripts/python.exe scripts/demo/docker_environment.py migrate
 ```
 
 Nếu có cả hai bộ cũ, công cụ không tự chọn dữ liệu. Chọn bộ chứa dữ liệu nhóm
 muốn tiếp tục (kiểm tra bằng pgAdmin/psql trước), ví dụ:
 
 ```powershell
-./scripts/Merge-Docker.ps1 -SourceProject codex-crypto-local
-# Hoặc: -SourceProject crypto-bigdata
+.venv/Scripts/python.exe scripts/demo/docker_environment.py migrate --source-project codex-crypto-local
+# Hoặc: --source-project crypto-bigdata
 ```
 
 Bộ không được chọn phải được dừng rõ ràng trước khi chuyển. Công cụ chỉ nhận các
@@ -59,11 +59,11 @@ Volume cũ không bị xóa. Nếu bộ cũ cũng có project `crypto-bigdata`, 
 liệu của bộ không chọn được giữ trong volume gốc và archive trước khi nhường tên.
 pgAdmin cũ được sao lưu cấu hình riêng, không tự trộn tài khoản/server registrations.
 
-Sau chuyển, chạy lại `Start-LocalDemo.ps1 -Streaming -Batch`, xem hai trang web,
+Sau chuyển, chạy lại `.\scripts\setup_env.ps1 -StartDemo -Streaming -Batch`, xem hai trang web,
 kiểm tra DB/luồng. Sau khi xác nhận có thể bỏ container nguồn còn đang dừng:
 
 ```powershell
-.venv/Scripts/python.exe scripts/docker_environment.py retire --manifest data/runtime/docker-migration/<run-id>/manifest.json
+.venv/Scripts/python.exe scripts/demo/docker_environment.py retire --manifest data/runtime/docker-migration/<run-id>/manifest.json
 ```
 
 Lệnh retire kiểm tra target, checksum backup và nguồn đã dừng trước khi xóa
@@ -94,16 +94,16 @@ của người khác. Không dùng `down -v`, `volume prune` hoặc reset Kafka 
 Điền `PGADMIN_EMAIL` và `PGADMIN_PASSWORD` riêng trong `.env`, sau đó:
 
 ```powershell
-./scripts/Start-LocalDemo.ps1 -Admin
+.\scripts\setup_env.ps1 -StartDemo -Admin
 ```
 
 Mở http://127.0.0.1:5050. Đăng ký server host **`postgres`**, port **5432**, database,
 user/password theo `.env`. Từ ứng dụng trên host vẫn dùng `127.0.0.1:5433`.
 Mặc định chỉ PostgreSQL/Kafka chạy, không tải pgAdmin để xem web. Docker ports chỉ
-bind localhost. `Stop-LocalDemo.ps1` dừng app; muốn dừng cả hạ tầng nhưng giữ dữ liệu:
+bind localhost. `.\scripts\setup_env.ps1 -StopDemo` dừng app; muốn dừng cả hạ tầng nhưng giữ dữ liệu:
 
 ```powershell
-.venv/Scripts/python.exe scripts/docker_environment.py stop
+.venv/Scripts/python.exe scripts/demo/docker_environment.py stop
 ```
 
 ## Những phần cần giữ khi dọn dự án

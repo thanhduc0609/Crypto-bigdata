@@ -57,7 +57,7 @@ load_env_vars()
 # CONFIGURATION
 # =============================================================================
 TARGET_SYMBOL = "BTC-USDT"
-KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC_TRADES", os.getenv("KAFKA_TOPIC", "crypto-trades"))
 STORAGE_DESTINATION = get_storage_mode()
 

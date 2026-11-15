@@ -139,6 +139,11 @@ def create(root, archive):
 def validate_sources(root, required):
     for name, expected in required.items():
         path = (root / name).resolve()
+        if not path.is_file():
+            relocated = name.replace("ml/", "ml/realtime/") if "long_term" not in name else name.replace("ml/", "ml/long_term_3y/")
+            cand = (root / relocated).resolve()
+            if cand.is_file():
+                path = cand
         if not path.is_relative_to(root) or not path.is_file() or sha(path.read_bytes()) != expected:
             raise ValueError("Source/model differs from frozen research: " + name)
 

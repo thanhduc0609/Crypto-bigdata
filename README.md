@@ -65,9 +65,9 @@ Mở PowerShell tại thư mục repo:
 
 ```powershell
 py -3.11 -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.local.lock.txt
-.venv/Scripts/python.exe scripts/research_artifacts.py restore
-.venv/Scripts/python.exe scripts/research_artifacts.py verify
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+.venv/Scripts/python.exe scripts/quality/research_artifacts.py restore
+.venv/Scripts/python.exe scripts/quality/research_artifacts.py verify
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 notepad .env
 ```
@@ -91,12 +91,12 @@ Nếu đã chạy bộ Docker cũ, chuyển dữ liệu một lần theo
 Sau đó:
 
 ```powershell
-./scripts/Start-LocalDemo.ps1 -Streaming -Batch
+.\scripts\setup_env.ps1 -StartDemo -Streaming -Batch
 # Chỉ cần xem web và kết quả nghiên cứu đã khôi phục:
-./scripts/Start-LocalDemo.ps1
+.\scripts\setup_env.ps1 -StartDemo
 # Tùy chọn pgAdmin: điền PGADMIN_EMAIL/PGADMIN_PASSWORD trong .env rồi thêm -Admin.
-# Dừng các tiến trình của ứng dụng, giữ container, dữ liệu và checkpoint:
-./scripts/Stop-LocalDemo.ps1
+# Dừng an toàn các tiến trình demo, giữ container, dữ liệu và checkpoint:
+.\scripts\setup_env.ps1 -StopDemo
 ```
 
 Chờ web/DB ready và các phép đo mới. Streaming/batch cần làm nóng. Gói nghiên
@@ -148,7 +148,7 @@ bài toán 3 năm. [Protocol và đánh giá](docs/SHORT_TERM_ML_EVALUATION.md).
 Bộ offline không cần khóa AWS, PostgreSQL, Kafka hoặc Java đang chạy:
 
 ```powershell
-.venv/Scripts/python.exe scripts/check_project.py
+.venv/Scripts/python.exe scripts/quality/check_project.py
 ```
 
 Runner chạy unit/hồi quy đã phân nhóm, kiểm JS, restore/verify gói nghiên cứu và
