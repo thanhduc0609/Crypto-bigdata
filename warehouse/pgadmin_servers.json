@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Crypto DW (PostgreSQL)",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "crypto_dw",
+      "Username": "crypto_local",
+      "SSLMode": "prefer"
+    }
+  }
+}

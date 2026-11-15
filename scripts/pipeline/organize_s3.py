@@ -1,4 +1,4 @@
-"""Move the old run-scoped S3 dataset into the project's layered layout.
+r"""Move the old run-scoped S3 dataset into the project's layered layout.
 
 Run .\scripts\setup_env.ps1 -StopDemo first. Copy is create-only and SHA-256 verified. Finish
 removes only the inventoried old objects, after an independent runtime audit.
