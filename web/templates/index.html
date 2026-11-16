@@ -7,8 +7,8 @@
     <title>{{ page_title }}</title>
     <!-- TradingView Lightweight Charts -->
     {% if page == "market" %}<script src="/static/vendor/lightweight-charts-4.1.3.js"></script>{% endif %}
-    <link rel="stylesheet" href="/static/css/styles.css">
-    <link rel="stylesheet" href="/static/css/research.css">
+    <link rel="stylesheet" href="/static/css/styles.css?v=20261116_v4">
+    <link rel="stylesheet" href="/static/css/research.css?v=20261116_v4">
 </head>
 
 <body class="theme-light theme-terminal page-{{ page }}">
@@ -132,22 +132,29 @@
             <span class="alert-text" id="connection-alert-text">Đang kết nối lại nguồn dữ liệu...</span>
         </div>
 
-        <!-- AREA B: MAIN WORKSPACE (Desktop: ~65% Chart, ~35% Prediction & Futures Plan) -->
+        <!-- AREA B: MAIN WORKSPACE (Biểu đồ nến kỹ thuật TO NHẤT & ĐẶT ĐẦU TIÊN) -->
         <section class="main-workspace-grid">
 
-            <!-- LEFT COLUMN: TRADINGVIEW CHART -->
+            <!-- CANDLESTICK CHART PANEL (HERO EXPANDED) -->
             <div class="chart-panel card">
                 <div class="chart-header-bar">
-                    <div class="timeframe-group">
-                        <button class="tf-btn active" data-tf="1m">1 phút</button>
-                        <button class="tf-btn" data-tf="1h">1 giờ</button>
-                        <button class="tf-btn" data-tf="1d">1 ngày UTC</button>
+                    <div class="chart-header-left">
+                        <span class="chart-header-title">Biểu đồ nến kỹ thuật · Spot BTC-USDT</span>
+                        <div class="timeframe-group">
+                            <button class="tf-btn active" data-tf="1m">1 phút</button>
+                            <button class="tf-btn" data-tf="1h">1 giờ</button>
+                            <button class="tf-btn" data-tf="1d">1 ngày UTC</button>
+                        </div>
                     </div>
-                    <div class="chart-options">
+                    <div class="chart-header-right">
                         <label class="toggle-control">
                             <input type="checkbox" id="toggle-vwap" checked>
                             <span>VWAP</span>
                         </label>
+                        <button type="button" class="btn-chart-expand" id="btn-chart-expand" title="Phóng to / Thu gọn kích thước biểu đồ nến">
+                            <span class="expand-icon" id="chart-expand-icon">⤢</span>
+                            <span id="chart-expand-text">Mở rộng</span>
+                        </button>
                     </div>
                 </div>
 
@@ -181,7 +188,64 @@
                 </div>
             </div>
 
-            <!-- RIGHT COLUMN: PREDICTION & FUTURES PLAN (HERO PANEL) -->
+            <!-- 2. REAL-TIME MARKET SENSORS ROW (ĐẶT NGAY DƯỚI BIỂU ĐỒ NẾN ĐỂ TIỆN QUAN SÁT) -->
+            <div class="analytics-row">
+
+                <!-- Col 1: 60s Order Flow Imbalance -->
+                <div class="analytics-card card">
+                    <div class="card-header-compact">
+                        <h3 class="card-heading">Áp lực Mua/Bán (60 giây)</h3>
+                        <span class="micro-badge" id="of-status-badge">Kết nối...</span>
+                    </div>
+
+                    <div class="of-ratio-display">
+                        <div class="of-ratio-labels">
+                            <span class="buy-text font-bold">Mua: <span class="tabular" id="of-buy-pct">—%</span> (<span
+                                    class="tabular" id="of-buy-vol">— BTC</span>)</span>
+                            <span class="sell-text font-bold">Bán: <span class="tabular" id="of-sell-pct">—%</span> (<span
+                                    class="tabular" id="of-sell-vol">— BTC</span>)</span>
+                        </div>
+                        <div class="of-bar-track">
+                            <div class="of-bar-buy" id="of-bar-buy" style="width: 50%;"></div>
+                            <div class="of-bar-sell" id="of-bar-sell" style="width: 50%;"></div>
+                        </div>
+                    </div>
+
+                    <div class="analytics-metrics-list">
+                        <div class="am-row">
+                            <span class="am-label">Cán cân (Imbalance):</span>
+                            <span class="am-val tabular font-bold" id="of-imbalance">—</span>
+                        </div>
+                        <div class="am-row">
+                            <span class="am-label">Số giao dịch khớp:</span>
+                            <span class="am-val tabular" id="of-trade-count">—</span>
+                        </div>
+                        <div class="am-row">
+                            <span class="am-label">Thời gian tích lũy:</span>
+                            <span class="am-val tabular" id="of-coverage">—s / 60s</span>
+                        </div>
+                    </div>
+                    <div class="card-hint">Giao dịch chủ động đã khớp trên Spot BTC-USDT. Không phải độ sâu sổ lệnh.</div>
+                </div>
+
+                <!-- Col 2: Volume History Bar Chart -->
+                <div class="analytics-card card">
+                    <div class="card-header-compact">
+                        <h3 class="card-heading">Khối lượng nến gần nhất</h3>
+                        <span class="micro-meta" id="volume-chart-tf">Nến 1m (BTC)</span>
+                    </div>
+                    <div class="chart-svg-container" id="volume-svg-container">
+                        <svg class="analytics-svg" id="volume-bar-svg" viewBox="0 0 360 130" preserveAspectRatio="none">
+                            <!-- Dynamic Volume Bars -->
+                        </svg>
+                    </div>
+                    <div class="card-hint" id="volume-chart-stats">Tổng volume 30 nến: <span class="tabular font-bold"
+                            id="vol-stats-total">— BTC</span></div>
+                </div>
+
+            </div>
+
+            <!-- 3. PREDICTION & FUTURES PLAN (DỰ BÁO HƯỚNG GIÁ & KẾ HOẠCH DƯỚI CÁC SENSOR) -->
             <div class="hero-panel card">
 
                 <!-- 1. Prediction Block -->
@@ -198,15 +262,15 @@
                     <!-- Direction Hero Box -->
                     <div class="direction-badge-container">
                         <div class="direction-badge badge-neutral" id="pred-dir-badge">CHỜ DỮ LIỆU</div>
-                        <div class="direction-subnote">NOT_UP bao gồm xu hướng giảm hoặc đi ngang tích lũy.</div>
+                        <div class="direction-subnote">Dự báo xu hướng TĂNG hoặc GIẢM sau 5 phút.</div>
                     </div>
 
                     <!-- Probability Bars & Values -->
                     <div class="prob-container">
                         <div class="prob-values-row">
-                            <span class="prob-label buy-text">P(UP): <strong class="tabular"
+                            <span class="prob-label buy-text">P(TĂNG): <strong class="tabular"
                                     id="pred-prob-up">—%</strong></span>
-                            <span class="prob-label sell-text">P(NOT_UP): <strong class="tabular"
+                            <span class="prob-label sell-text">P(GIẢM): <strong class="tabular"
                                     id="pred-prob-notup">—%</strong></span>
                         </div>
                         <div class="prob-track">
@@ -289,101 +353,14 @@
             </div>
         </section>
 
-        <!-- AREA C: ANALYTICS ROW (3 Equal Columns) -->
-        <section class="analytics-row">
-
-            <!-- Col 1: 60s Order Flow Imbalance -->
-            <div class="analytics-card card">
-                <div class="card-header-compact">
-                    <h3 class="card-heading">Áp lực Mua/Bán (60 giây)</h3>
-                    <span class="micro-badge" id="of-status-badge">Kết nối...</span>
-                </div>
-
-                <div class="of-ratio-display">
-                    <div class="of-ratio-labels">
-                        <span class="buy-text font-bold">Mua: <span class="tabular" id="of-buy-pct">—%</span> (<span
-                                class="tabular" id="of-buy-vol">— BTC</span>)</span>
-                        <span class="sell-text font-bold">Bán: <span class="tabular" id="of-sell-pct">—%</span> (<span
-                                class="tabular" id="of-sell-vol">— BTC</span>)</span>
-                    </div>
-                    <div class="of-bar-track">
-                        <div class="of-bar-buy" id="of-bar-buy" style="width: 50%;"></div>
-                        <div class="of-bar-sell" id="of-bar-sell" style="width: 50%;"></div>
-                    </div>
-                </div>
-
-                <div class="analytics-metrics-list">
-                    <div class="am-row">
-                        <span class="am-label">Cán cân (Imbalance):</span>
-                        <span class="am-val tabular font-bold" id="of-imbalance">—</span>
-                    </div>
-                    <div class="am-row">
-                        <span class="am-label">Số giao dịch khớp:</span>
-                        <span class="am-val tabular" id="of-trade-count">—</span>
-                    </div>
-                    <div class="am-row">
-                        <span class="am-label">Thời gian tích lũy:</span>
-                        <span class="am-val tabular" id="of-coverage">—s / 60s</span>
-                    </div>
-                </div>
-                <div class="card-hint">Giao dịch chủ động đã khớp trên Spot BTC-USDT. Không phải độ sâu sổ lệnh.</div>
-            </div>
-
-            <!-- Col 2: Volume History Bar Chart -->
-            <div class="analytics-card card">
-                <div class="card-header-compact">
-                    <h3 class="card-heading">Khối lượng nến gần nhất</h3>
-                    <span class="micro-meta" id="volume-chart-tf">Nến 1m (BTC)</span>
-                </div>
-                <div class="chart-svg-container" id="volume-svg-container">
-                    <svg class="analytics-svg" id="volume-bar-svg" viewBox="0 0 360 130" preserveAspectRatio="none">
-                        <!-- Dynamic Volume Bars -->
-                    </svg>
-                </div>
-                <div class="card-hint" id="volume-chart-stats">Tổng volume 30 nến: <span class="tabular font-bold"
-                        id="vol-stats-total">— BTC</span></div>
-            </div>
-
-            <!-- Col 3: Large Trades Donut Chart -->
-            <div class="analytics-card card">
-                <div class="card-header-compact">
-                    <h3 class="card-heading" id="donut-heading">Cơ cấu giao dịch lớn (≥ 100.000 USDT)</h3>
-                    <span class="micro-meta" id="donut-filter-desc">Toàn bộ tập lọc</span>
-                </div>
-                <div class="donut-chart-container">
-                    <div class="donut-svg-wrapper">
-                        <svg class="analytics-svg donut-svg" id="donut-svg" viewBox="0 0 160 160">
-                            <!-- Dynamic Donut Slices & Center Label -->
-                        </svg>
-                    </div>
-                    <div class="donut-legend" id="donut-legend">
-                        <div class="donut-legend-item">
-                            <span class="legend-color-dot dot-buy"></span>
-                            <span class="legend-label">Mua:</span>
-                            <strong class="tabular buy-text" id="donut-buy-val">—</strong>
-                            <small class="tabular text-muted" id="donut-buy-pct">(—%)</small>
-                        </div>
-                        <div class="donut-legend-item">
-                            <span class="legend-color-dot dot-sell"></span>
-                            <span class="legend-label">Bán:</span>
-                            <strong class="tabular sell-text" id="donut-sell-val">—</strong>
-                            <small class="tabular text-muted" id="donut-sell-pct">(—%)</small>
-                        </div>
-                    </div>
-                </div>
-                <div class="card-hint">Tính trên toàn bộ giao dịch thỏa bộ lọc từ Data Warehouse.</div>
-            </div>
-
-        </section>
-
         <!-- AREA D: BOTTOM ZONE (Large Trades Table, Collapsible Pred History, Model Details) -->
         <section class="bottom-section">
 
-            <!-- Large Trades Table -->
+            <!-- Large Trades & Whale Flow Structure (Giao dịch lớn & Cơ cấu dòng tiền gộp chung) -->
             <div class="card trades-table-card">
                 <div class="trades-card-header">
                     <div class="tch-left">
-                    <h3 class="card-heading" id="large-trades-heading">Giao dịch lớn (≥ 100.000 USDT)</h3>
+                        <h3 class="card-heading" id="large-trades-heading">Giao dịch lớn (≥ 100.000 USDT)</h3>
                         <span class="micro-meta" id="trades-summary-inline">Tổng cộng: <strong class="tabular"
                                 id="trades-summary-count">—</strong> giao dịch (<strong class="tabular"
                                 id="trades-summary-value">— USDT</strong>)</span>
@@ -405,6 +382,40 @@
                             <button id="btn-export-trades" class="btn btn-secondary btn-sm">Xuất CSV</button>
                             <span id="trades-export-feedback" class="evidence-note" role="status" aria-live="polite"></span>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Gộp Cơ cấu giao dịch lớn vào chung giao diện thẻ Giao dịch lớn -->
+                <div class="trades-breakdown-bar">
+                    <div class="tbb-donut-box">
+                        <div class="donut-chart-container">
+                            <div class="donut-svg-wrapper">
+                                <svg class="analytics-svg donut-svg" id="donut-svg" viewBox="0 0 160 160">
+                                    <!-- Dynamic Donut Slices & Center Label -->
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tbb-info-box">
+                        <div class="tbb-header">
+                            <h4 class="tbb-title" id="donut-heading">Cơ cấu giao dịch lớn (≥ 100.000 USDT)</h4>
+                            <span class="micro-meta" id="donut-filter-desc">Toàn bộ tập lọc</span>
+                        </div>
+                        <div class="donut-legend" id="donut-legend">
+                            <div class="donut-legend-item">
+                                <span class="legend-color-dot dot-buy"></span>
+                                <span class="legend-label">Phe Mua:</span>
+                                <strong class="tabular buy-text" id="donut-buy-val">—</strong>
+                                <small class="tabular text-muted" id="donut-buy-pct">(—%)</small>
+                            </div>
+                            <div class="donut-legend-item">
+                                <span class="legend-color-dot dot-sell"></span>
+                                <span class="legend-label">Phe Bán:</span>
+                                <strong class="tabular sell-text" id="donut-sell-val">—</strong>
+                                <small class="tabular text-muted" id="donut-sell-pct">(—%)</small>
+                            </div>
+                        </div>
+                        <div class="tbb-hint">Thống kê cơ cấu phe Mua / Bán trên toàn bộ giao dịch thỏa mãn bộ lọc thời gian và ngưỡng giá trị từ Data Warehouse.</div>
                     </div>
                 </div>
 
@@ -508,7 +519,7 @@
 
     <!-- Application JavaScript Client -->
     {% if page == "market" %}
-    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/dashboard.js?v=20261116_v4"></script>
     {% else %}
     <script src="/static/js/long_term_viewport.js"></script>
     <script src="/static/js/long_term_chart.js"></script>

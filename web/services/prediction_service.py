@@ -134,16 +134,28 @@ def get_prediction_history(
 
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM warehouse.fact_btc_predictions WHERE symbol = %s;", (symbol,))
+            cur.execute("""
+                SELECT count(DISTINCT to_timestamp(floor(extract(epoch from feature_timestamp) / 300.0) * 300))
+                FROM warehouse.fact_btc_predictions 
+                WHERE symbol = %s;
+            """, (symbol,))
             total_count = cur.fetchone()[0]
 
             cur.execute("""
+                WITH binned_predictions AS (
+                    SELECT DISTINCT ON (to_timestamp(floor(extract(epoch from feature_timestamp) / 300.0) * 300))
+                        prediction_id, feature_timestamp, current_price,
+                        predicted_direction, probability_up, probability_not_up,
+                        target_timestamp, actual_future_price, actual_direction, is_correct
+                    FROM warehouse.fact_btc_predictions
+                    WHERE symbol = %s
+                    ORDER BY to_timestamp(floor(extract(epoch from feature_timestamp) / 300.0) * 300) DESC, feature_timestamp ASC
+                )
                 SELECT 
                     prediction_id, feature_timestamp, current_price,
                     predicted_direction, probability_up, probability_not_up,
                     target_timestamp, actual_future_price, actual_direction, is_correct
-                FROM warehouse.fact_btc_predictions
-                WHERE symbol = %s
+                FROM binned_predictions
                 ORDER BY feature_timestamp DESC
                 LIMIT %s OFFSET %s;
             """, (symbol, page_size, offset))

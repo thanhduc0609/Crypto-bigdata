@@ -32,7 +32,7 @@ if str(project_root) not in sys.path:
 
 from processing.core.env import load_env_vars
 from web.orderflow_realtime import get_orderflow_tracker
-from ml.prediction_worker import get_prediction_worker
+from ml.realtime.prediction_worker import get_prediction_worker
 from web.services.overview_service import get_overview_data, get_candles_data
 from web.services.candles_resilience import CandleService
 from web.services.trades_service import get_large_trades, generate_large_trades_csv
@@ -51,6 +51,9 @@ app = Flask(
     template_folder=str(project_root / "web" / "templates"),
     static_folder=str(project_root / "web" / "static")
 )
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.jinja_env.auto_reload = True
 
 OKX_REST_URL = os.getenv("OKX_REST_URL", "https://www.okx.com")
 TARGET_SYMBOL = "BTC-USDT"

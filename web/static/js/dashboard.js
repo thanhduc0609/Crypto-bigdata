@@ -62,6 +62,10 @@
         tfButtons: document.querySelectorAll(".tf-btn"),
         toggleVwap: document.getElementById("toggle-vwap"),
         chartContainer: document.getElementById("tv-chart"),
+        chartWrapper: document.getElementById("tv-chart-wrapper"),
+        btnChartExpand: document.getElementById("btn-chart-expand"),
+        chartExpandIcon: document.getElementById("chart-expand-icon"),
+        chartExpandText: document.getElementById("chart-expand-text"),
         chartErrorOverlay: document.getElementById("chart-error-overlay"),
         candleProvenance: document.getElementById("candle-provenance"),
         ciTime: document.getElementById("ci-time"),
@@ -288,7 +292,7 @@
 
             try {
                 const initialWidth = el.chartContainer.clientWidth || 700;
-                const initialHeight = el.chartContainer.clientHeight || 480;
+                const initialHeight = el.chartContainer.clientHeight || 580;
 
                 this.chart = LightweightCharts.createChart(el.chartContainer, {
                     width: initialWidth,
@@ -361,7 +365,7 @@
                 window.addEventListener("resize", () => {
                     if (this.chart && el.chartContainer) {
                         const w = el.chartContainer.clientWidth;
-                        const h = el.chartContainer.clientHeight || 480;
+                        const h = el.chartContainer.clientHeight || 580;
                         if (w > 0) {
                             this.chart.applyOptions({ width: w, height: h });
                         }
@@ -557,7 +561,7 @@
                 el.predDirBadge.textContent = "TĂNG (UP)";
                 el.predDirBadge.className = "direction-badge badge-up";
             } else if (dir === "NOT_UP") {
-                el.predDirBadge.textContent = "KHÔNG TĂNG (NOT_UP)";
+                el.predDirBadge.textContent = "GIẢM (DOWN)";
                 el.predDirBadge.className = "direction-badge badge-notup";
             } else {
                 el.predDirBadge.textContent = "CHỜ DỮ LIỆU";
@@ -942,12 +946,24 @@
                 if (!history.length) {
                     el.tablePredHistoryBody.innerHTML = `<tr><td colspan="8" class="empty-cell">Chưa có lịch sử dự báo nào trong cơ sở dữ liệu.</td></tr>`;
                 } else {
-                    let html = "";
+                    // Gộp dự báo trong 5 phút thành 1 dòng (chu kỳ 5 phút 1 dòng)
+                    const filteredHistory = [];
+                    let lastBucket = null;
                     for (const h of history) {
+                        const featTime = new Date(h.feature_timestamp).getTime();
+                        const bucket = Math.floor(featTime / (5 * 60 * 1000));
+                        if (lastBucket === null || lastBucket !== bucket) {
+                            filteredHistory.push(h);
+                            lastBucket = bucket;
+                        }
+                    }
+
+                    let html = "";
+                    for (const h of filteredHistory) {
                         const isUp = h.direction_label === "UP";
                         const predBadge = isUp
                             ? `<span class="change-tag change-up">TĂNG</span>`
-                            : `<span class="change-tag change-down">KHÔNG TĂNG</span>`;
+                            : `<span class="change-tag change-down">GIẢM</span>`;
 
                         let evalHtml = `<span class="text-muted">—</span>`;
                         if (h.eval_status === "PENDING_TARGET") {
@@ -959,7 +975,7 @@
                         }
 
                         const actualDir = h.actual_direction_label
-                            ? (h.actual_direction_label === "UP" ? "TĂNG" : "KHÔNG TĂNG")
+                            ? (h.actual_direction_label === "UP" ? "TĂNG" : "GIẢM")
                             : "—";
 
                         html += `
@@ -1106,6 +1122,24 @@
                 el.toggleVwap.addEventListener("change", (e) => {
                     state.showVwap = e.target.checked;
                     TVChartManager.updateData(TVChartManager.rawCandles);
+                });
+            }
+
+            // Chart expand / collapse button
+            if (el.btnChartExpand && el.chartWrapper) {
+                el.btnChartExpand.addEventListener("click", () => {
+                    const isExpanded = el.chartWrapper.classList.toggle("chart-expanded");
+                    if (el.chartExpandIcon) el.chartExpandIcon.textContent = isExpanded ? "⤡" : "⤢";
+                    if (el.chartExpandText) el.chartExpandText.textContent = isExpanded ? "Thu gọn" : "Mở rộng";
+                    el.btnChartExpand.setAttribute("aria-expanded", String(isExpanded));
+                    setTimeout(() => {
+                        if (TVChartManager.chart && el.chartContainer) {
+                            const w = el.chartContainer.clientWidth;
+                            const h = el.chartContainer.clientHeight || (isExpanded ? 760 : 580);
+                            TVChartManager.chart.applyOptions({ width: w, height: h });
+                            TVChartManager.chart.timeScale().fitContent();
+                        }
+                    }, 80);
                 });
             }
 
